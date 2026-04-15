@@ -1,5 +1,5 @@
 export default function McpInfoPage() {
-  const baseUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://your-app.vercel.app';
+  const baseUrl = process.env['NEXT_PUBLIC_MCP_URL'] ?? 'https://your-mcp-app.vercel.app';
 
   return (
     <div className="stack">

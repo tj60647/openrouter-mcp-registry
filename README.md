@@ -21,24 +21,24 @@ This registry solves all three problems:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       Vercel Deployment                          │
-│                                                                 │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐  │
-│  │  apps/web    │    │  apps/mcp    │    │  packages/shared  │  │
-│  │  (Next.js)   │    │  (Next.js)   │    │  Types, services  │  │
-│  │  Demo UI     │───▶│  MCP + REST  │◀───│  Providers, utils │  │
-│  └──────────────┘    └──────┬───────┘    └───────────────────┘  │
-│                             │                                   │
-│                    ┌────────▼────────┐                          │
-│                    │  Vercel Postgres │                          │
-│                    │  models         │                          │
-│                    │  aliases        │                          │
-│                    │  sync_status    │                          │
-│                    └─────────────────┘                          │
-│                                                                 │
-│  Vercel Cron (weekly) ──▶ /api/cron/sync ──▶ OpenRouter API     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────┐  ┌──────────────────────────────┐
+│   Vercel Deployment (web)    │  │   Vercel Deployment (mcp)    │
+│                              │  │                              │
+│  ┌──────────────┐            │  │  ┌──────────────┐            │
+│  │  apps/web    │            │  │  │  apps/mcp    │            │
+│  │  (Next.js)   │            │  │  │  (Next.js)   │            │
+│  │  Demo UI     │            │  │  │  MCP + REST  │            │
+│  └──────────────┘            │  │  └──────┬───────┘            │
+│                              │  │         │                    │
+└──────────────────────────────┘  │  ┌──────▼────────┐          │
+                                  │  │ Vercel Postgres│          │
+  packages/shared ────────────────▶  │ models         │          │
+  (Types, services)               │  │ aliases        │          │
+                                  │  │ sync_status    │          │
+                                  │  └───────────────┘           │
+                                  │                              │
+                                  │  Cron ──▶ OpenRouter API     │
+                                  └──────────────────────────────┘
 ```
 
 ### Monorepo layout
@@ -196,7 +196,7 @@ Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_con
 {
   "mcpServers": {
     "openrouter-registry": {
-      "url": "https://your-app.vercel.app/api/mcp",
+      "url": "https://your-mcp-app.vercel.app/api/mcp",
       "transport": "streamable-http"
     }
   }
@@ -211,7 +211,7 @@ If `MCP_API_KEY` is set:
 {
   "mcpServers": {
     "openrouter-registry": {
-      "url": "https://your-app.vercel.app/api/mcp",
+      "url": "https://your-mcp-app.vercel.app/api/mcp",
       "transport": "streamable-http",
       "headers": {
         "Authorization": "Bearer YOUR_MCP_API_KEY"
