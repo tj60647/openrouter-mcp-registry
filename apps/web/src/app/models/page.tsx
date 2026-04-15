@@ -83,7 +83,7 @@ export default function ModelsPage() {
                     <td><code style={{ fontSize: '0.8rem' }}>{m.id}</code></td>
                     <td><span className="badge badge-info">{m.provider}</span></td>
                     <td>{m.displayName}</td>
-                    <td>{m.contextLength ? `${(m.contextLength / 1000).toFixed(0)}k` : '—'}</td>
+                    <td>{m.contextLength ? `${Math.floor(m.contextLength / 1000)}k` : '—'}</td>
                     <td>{m.inputPricePer1k != null ? `$${m.inputPricePer1k.toFixed(4)}` : '—'}</td>
                     <td>{m.outputPricePer1k != null ? `$${m.outputPricePer1k.toFixed(4)}` : '—'}</td>
                   </tr>

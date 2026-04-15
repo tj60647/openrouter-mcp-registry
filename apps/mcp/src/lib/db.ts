@@ -88,8 +88,8 @@ export function createModelRepository(): ModelRepository {
       const now = new Date().toISOString();
       if (success) {
         await sql`
-          INSERT INTO sync_status (last_successful_sync, last_attempted_sync, last_error, record_count)
-          VALUES (${now}, ${now}, NULL, ${count ?? 0})
+          INSERT INTO sync_status (id, last_successful_sync, last_attempted_sync, last_error, record_count)
+          VALUES (1, ${now}, ${now}, NULL, ${count ?? 0})
           ON CONFLICT (id) DO UPDATE SET
             last_successful_sync = EXCLUDED.last_successful_sync,
             last_attempted_sync = EXCLUDED.last_attempted_sync,
@@ -98,8 +98,8 @@ export function createModelRepository(): ModelRepository {
         `;
       } else {
         await sql`
-          INSERT INTO sync_status (last_successful_sync, last_attempted_sync, last_error, record_count)
-          VALUES (NULL, ${now}, ${error ?? null}, 0)
+          INSERT INTO sync_status (id, last_attempted_sync, last_error, record_count)
+          VALUES (1, ${now}, ${error ?? null}, 0)
           ON CONFLICT (id) DO UPDATE SET
             last_attempted_sync = EXCLUDED.last_attempted_sync,
             last_error = EXCLUDED.last_error

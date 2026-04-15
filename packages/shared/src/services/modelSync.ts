@@ -40,10 +40,8 @@ export class ModelSyncService {
       const models: Model[] = providerModels.map((pm) => {
         const id = canonicalizeModelId(pm.id);
         const provider = extractProvider(id);
-        const inputPrice = pm.pricing?.prompt
-          ? parseFloat(pm.pricing.prompt) * 1000
-          : null;
-        const outputPrice = pm.pricing?.completion
+        const rawInputPrice = pm.pricing?.prompt ? parseFloat(pm.pricing.prompt) * 1000 : null;
+        const rawOutputPrice = pm.pricing?.completion
           ? parseFloat(pm.pricing.completion) * 1000
           : null;
 
@@ -55,8 +53,9 @@ export class ModelSyncService {
           provider,
           displayName: pm.name,
           contextLength: pm.contextLength ?? null,
-          inputPricePer1k: isNaN(inputPrice as number) ? null : inputPrice,
-          outputPricePer1k: isNaN(outputPrice as number) ? null : outputPrice,
+          inputPricePer1k: rawInputPrice != null && !isNaN(rawInputPrice) ? rawInputPrice : null,
+          outputPricePer1k:
+            rawOutputPrice != null && !isNaN(rawOutputPrice) ? rawOutputPrice : null,
           metadata: rest as Record<string, unknown>,
           fetchedAt: now,
         };

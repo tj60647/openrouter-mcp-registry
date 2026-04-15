@@ -31,7 +31,10 @@ export default function SyncStatusPage() {
   }
 
   async function triggerRefresh() {
-    if (!adminToken) { setRefreshResult('Admin token required'); return; }
+    if (!adminToken) {
+      setRefreshResult('Admin token required');
+      return;
+    }
     setRefreshing(true);
     setRefreshResult(null);
     try {
