@@ -160,9 +160,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   try {
     const body = await req.text();
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+    const transport = new WebStandardStreamableHTTPServerTransport({});
 
     const server = createMcpServer();
     await server.connect(transport);
