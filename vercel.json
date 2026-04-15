@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "crons": [
+    {
+      "path": "/api/cron/sync",
+      "schedule": "0 0 * * 0"
+    }
+  ],
+  "functions": {
+    "apps/web/src/app/api/admin/refresh/route.ts": {
+      "maxDuration": 60
+    },
+    "apps/web/src/app/api/cron/sync/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
