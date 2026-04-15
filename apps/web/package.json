@@ -1,0 +1,33 @@
+{
+  "name": "@openrouter-mcp/web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
+    "db:seed": "node --loader ts-node/esm scripts/seed.ts"
+  },
+  "dependencies": {
+    "@openrouter-mcp/shared": "workspace:*",
+    "@vercel/postgres": "^0.10.0",
+    "next": "^15.3.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.3",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^15.3.1"
+  }
+}
