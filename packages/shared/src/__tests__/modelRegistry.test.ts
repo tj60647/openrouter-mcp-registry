@@ -1,0 +1,58 @@
+import { describe, it, expect, vi } from 'vitest';
+import { ModelRegistry } from '../services/modelRegistry';
+import type { AliasLookup } from '../services/aliasService';
+import type { ModelLookup } from '../services/modelRegistry';
+import type { Model } from '../types/model';
+
+const fakeModel: Model = {
+  id: 'openai/gpt-4o',
+  provider: 'openai',
+  displayName: 'GPT-4o',
+  contextLength: 128000,
+  inputPricePer1k: 0.005,
+  outputPricePer1k: 0.015,
+  metadata: {},
+  fetchedAt: new Date(),
+};
+
+describe('ModelRegistry', () => {
+  const makeRegistry = (
+    findById: (id: string) => Promise<Model | null>,
+    resolveAlias: (alias: string) => Promise<string | null>
+  ) => {
+    const modelLookup: ModelLookup = { findById };
+    const aliasLookup: AliasLookup = { resolveAlias };
+    return new ModelRegistry(modelLookup, aliasLookup);
+  };
+
+  it('resolves alias to model', async () => {
+    const registry = makeRegistry(
+      async () => fakeModel,
+      async (alias) => (alias === 'gpt-4o' ? 'openai/gpt-4o' : null)
+    );
+    const result = await registry.resolve('gpt-4o');
+    expect(result.source).toBe('alias');
+    expect(result.resolved).toBe('openai/gpt-4o');
+    expect(result.model).toEqual(fakeModel);
+  });
+
+  it('resolves canonical ID directly', async () => {
+    const registry = makeRegistry(
+      async () => fakeModel,
+      async () => null
+    );
+    const result = await registry.resolve('openai/gpt-4o');
+    expect(result.source).toBe('canonical');
+    expect(result.resolved).toBe('openai/gpt-4o');
+  });
+
+  it('returns source=normalized for unknown non-canonical input', async () => {
+    const registry = makeRegistry(
+      async () => null,
+      async () => null
+    );
+    const result = await registry.resolve('unknown-thing');
+    expect(result.source).toBe('normalized');
+    expect(result.model).toBeNull();
+  });
+});
