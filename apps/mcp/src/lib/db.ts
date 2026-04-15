@@ -1,4 +1,4 @@
-import { sql } from '@vercel/postgres';
+import { sql, db } from '@vercel/postgres';
 import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 import type { ModelRepository } from '@openrouter-mcp/shared';
@@ -47,28 +47,40 @@ export async function resolveAlias(alias: string): Promise<string | null> {
 export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
-      for (const model of models) {
-        await sql`
-          INSERT INTO models (id, provider, display_name, context_length, input_price_per_1k, output_price_per_1k, metadata, fetched_at)
-          VALUES (
-            ${model.id},
-            ${model.provider},
-            ${model.displayName},
-            ${model.contextLength},
-            ${model.inputPricePer1k},
-            ${model.outputPricePer1k},
-            ${JSON.stringify(model.metadata)},
-            ${model.fetchedAt.toISOString()}
-          )
-          ON CONFLICT (id) DO UPDATE SET
-            provider = EXCLUDED.provider,
-            display_name = EXCLUDED.display_name,
-            context_length = EXCLUDED.context_length,
-            input_price_per_1k = EXCLUDED.input_price_per_1k,
-            output_price_per_1k = EXCLUDED.output_price_per_1k,
-            metadata = EXCLUDED.metadata,
-            fetched_at = EXCLUDED.fetched_at
-        `;
+      // Uses individual upserts within a transaction to maintain atomicity.
+      // Each upsert uses parameterized queries via the sql tag to prevent injection.
+      const client = await db.connect();
+      try {
+        await client.sql`BEGIN`;
+        for (const model of models) {
+          await client.sql`
+            INSERT INTO models (id, provider, display_name, context_length, input_price_per_1k, output_price_per_1k, metadata, fetched_at)
+            VALUES (
+              ${model.id},
+              ${model.provider},
+              ${model.displayName},
+              ${model.contextLength},
+              ${model.inputPricePer1k},
+              ${model.outputPricePer1k},
+              ${JSON.stringify(model.metadata)},
+              ${model.fetchedAt.toISOString()}
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              provider = EXCLUDED.provider,
+              display_name = EXCLUDED.display_name,
+              context_length = EXCLUDED.context_length,
+              input_price_per_1k = EXCLUDED.input_price_per_1k,
+              output_price_per_1k = EXCLUDED.output_price_per_1k,
+              metadata = EXCLUDED.metadata,
+              fetched_at = EXCLUDED.fetched_at
+          `;
+        }
+        await client.sql`COMMIT`;
+      } catch (err) {
+        await client.sql`ROLLBACK`;
+        throw err;
+      } finally {
+        client.release();
       }
     },
 
