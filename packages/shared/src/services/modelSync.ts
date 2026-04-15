@@ -47,8 +47,8 @@ export class ModelSyncService {
           ? parseFloat(pm.pricing.completion) * 1000
           : null;
 
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { id: _id, name: _name, contextLength: _cl, pricing: _p, ...rest } = pm;
-        void _id; void _name; void _cl; void _p;
 
         return {
           id,

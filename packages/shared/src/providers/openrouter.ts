@@ -46,9 +46,9 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
     | { prompt?: string; completion?: string }
     | undefined;
 
-  // Remove fields we've explicitly mapped
+  // Remove fields we've explicitly mapped; keep the rest as metadata
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { id: _id, name: _name, context_length: _cl, pricing: _pricing, ...rest } = raw;
-  void _id; void _name; void _cl; void _pricing;
 
   return { id, name, contextLength, pricing, ...rest };
 }
