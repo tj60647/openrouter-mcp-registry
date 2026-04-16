@@ -23,7 +23,7 @@ export default function AdminLoginPage() {
         const json = (await res.json()) as { error?: string };
         throw new Error(json.error ?? 'Login failed');
       }
-      router.push('/sync-status');
+      router.push('/admin/refresh');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Login failed');
     } finally {

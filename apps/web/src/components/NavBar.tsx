@@ -8,6 +8,7 @@ const links = [
   { href: '/models', label: 'Models' },
   { href: '/resolve', label: 'Resolve' },
   { href: '/sync-status', label: 'Sync Status' },
+  { href: '/admin/refresh', label: 'Admin Refresh' },
   { href: '/mcp-info', label: 'MCP Info' },
 ];
 

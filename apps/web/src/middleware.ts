@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifySessionToken, SESSION_COOKIE } from './lib/session';
 
 export const config = {
-  matcher: ['/sync-status', '/admin/:path*'],
+  matcher: ['/admin/:path*'],
 };
 
 export async function middleware(req: NextRequest): Promise<NextResponse> {
