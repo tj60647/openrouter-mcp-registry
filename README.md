@@ -24,22 +24,23 @@ This registry solves all three problems:
 graph TD
     shared["packages/shared\nTypes · Services"]
 
-    subgraph web_deploy["Vercel Deployment · web"]
-        webApp["apps/web\nNext.js · Demo UI"]
+    subgraph mcp_deploy["Vercel Project · apps/mcp  ← deploy this first"]
+        mcpApp["apps/mcp\nNext.js · MCP + REST API"]
+        db[("Neon Postgres\nmodels · aliases · sync_status")]
+        cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
     end
 
-    subgraph mcp_deploy["Vercel Deployment · mcp"]
-        mcpApp["apps/mcp\nNext.js · MCP + REST"]
-        db[("Vercel Postgres\nmodels · aliases · sync_status")]
-        cron["Cron (weekly)"]
+    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI"]
+        webApp["apps/web\nNext.js · Demo UI + REST"]
     end
 
     openrouter["OpenRouter API"]
 
-    shared -.->|shared code| webApp
     shared -.->|shared code| mcpApp
+    shared -.->|shared code| webApp
     mcpApp --> db
-    cron -->|sync| openrouter
+    webApp -->|same POSTGRES_URL| db
+    cron -->|weekly sync| openrouter
 ```
 
 ### Monorepo layout
@@ -47,18 +48,22 @@ graph TD
 ```
 openrouter-mcp-registry/
 ├── apps/
-│   ├── mcp/          Next.js app — MCP server + REST API
-│   └── web/          Next.js app — Demo UI + REST API
+│   ├── mcp/              Next.js app — MCP server + full REST API  ← primary
+│   │   └── vercel.json   Vercel cron config for this project
+│   └── web/              Next.js app — Demo UI + read REST API     ← optional
 ├── packages/
-│   └── shared/       Shared TypeScript — types, services, providers
-├── vercel.json       Vercel cron + function config
-├── .env.example      All environment variables documented
+│   └── shared/           Shared TypeScript — types, services, providers
+├── vercel.json           Cron config for apps/web if deployed from repo root
 └── pnpm-workspace.yaml
 ```
 
 ---
 
 ## REST API
+
+Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset for its demo UI.
+
+### `apps/mcp` routes (full API)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -68,7 +73,18 @@ openrouter-mcp-registry/
 | `GET` | `/api/health` | Health check + sync status summary |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`) |
-| `GET` | `/api/cron/sync` | Weekly cron sync (called by Vercel, protected by `CRON_SECRET`) |
+| `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
+| `POST` | `/api/mcp` | MCP Streamable HTTP endpoint |
+
+### `apps/web` routes (demo UI)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/models` | List cached models |
+| `POST` | `/api/resolve` | Resolve alias/ID → canonical model |
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
+| `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
 
 ## MCP Tools
 
@@ -117,8 +133,10 @@ cd openrouter-mcp-registry
 pnpm install
 
 # 2. Configure environment
-cp .env.example apps/web/.env.local
-# Edit apps/web/.env.local and fill in the required values
+cp apps/mcp/.env.example apps/mcp/.env.local
+cp apps/web/.env.example apps/web/.env.local
+# Edit both .env.local files and fill in the required values
+# (Both apps use the same POSTGRES_URL — point them at the same database)
 
 # 3. Run database migrations
 pnpm db:migrate
@@ -148,50 +166,101 @@ pnpm dev
 
 ## Deployment (Vercel)
 
-### 1. Fork and connect
+There are **two separate Vercel projects** — one for each app. Both share the same Neon Postgres database.
 
-1. Fork this repository
-2. Go to [vercel.com/new](https://vercel.com/new) and import your fork
-3. Select `apps/web` as the root directory (or deploy both apps separately)
+> **Minimum viable deployment:** you only need `apps/mcp`. Deploy `apps/web` only if you want the demo UI.
 
-### 2. Add Vercel Postgres (mcp project only)
+---
 
-> **Note:** `@vercel/postgres` is deprecated. Vercel now provisions **Neon** as a native integration via the Vercel Marketplace. If you are setting up a new database, select **Neon** from the Marketplace — `POSTGRES_URL` and the `@vercel/postgres` SDK continue to work with Neon without any code changes.
+### Project 1 — `apps/mcp` (required)
 
-Add the database to the **`mcp`** Vercel project (not `web` — only `apps/mcp` uses the database):
+This is the MCP server. It owns the database writes and the weekly cron sync.
 
-1. Open the **`mcp`** project in your Vercel dashboard → **Storage** → **Connect Database** → **Create New** → **Neon** (or **Postgres** if still available)
-2. Vercel will automatically inject `POSTGRES_URL` and related env vars into the `mcp` project
+#### 1. Create the Vercel project
 
-### 3. Set environment variables
+1. Go to [vercel.com/new](https://vercel.com/new) and import your fork
+2. Under **Root Directory**, enter `apps/mcp`
+3. Vercel will auto-detect Next.js and configure the build
 
-In **Vercel Dashboard → Settings → Environment Variables**, add:
+#### 2. Add a Neon database
 
-| Variable | Description |
-|----------|-------------|
-| `OPENROUTER_API_KEY` | Your OpenRouter API key |
-| `ADMIN_SECRET` | Random secret for admin endpoints |
-| `MCP_API_KEY` | (Optional) Token to protect the MCP endpoint |
-| `NEXT_PUBLIC_APP_URL` | Your deployed app URL |
+In the **`mcp`** Vercel project → **Storage** → **Connect Database** → **Create New** → **Neon**
 
-### 4. Run migrations
+Vercel automatically injects `POSTGRES_URL` and `CRON_SECRET` into the project's environment.
 
-After first deploy, trigger migrations via the Vercel build command or run locally against your Vercel Postgres:
+#### 3. Set environment variables
+
+In **Settings → Environment Variables**:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENROUTER_API_KEY` | ✅ | Your [OpenRouter](https://openrouter.ai) API key |
+| `ADMIN_SECRET` | ✅ | Random secret for admin endpoints |
+| `MCP_API_KEY` | ❌ | Token to protect the MCP endpoint (open if unset) |
+
+#### 4. Run database migrations
+
+After the first deploy, run migrations against your Neon database:
 
 ```bash
-# Pull Vercel env vars locally
-npx vercel env pull apps/web/.env.local
+# Pull the injected env vars locally
+npx vercel env pull apps/mcp/.env.local --project <your-mcp-project-name>
+
+# Run migrations and seed default aliases
 pnpm db:migrate
 pnpm db:seed
 ```
 
-### 5. Cron job
+> `pnpm db:migrate` and `pnpm db:seed` execute in the `apps/web` workspace (where the migration scripts live), but they use the `POSTGRES_URL` from your environment, so they work against whichever database the env var points to.
 
-`vercel.json` configures a weekly cron at `0 0 * * 0` (Sundays at midnight UTC) that hits `/api/cron/sync`. Vercel automatically injects `CRON_SECRET` and sends it as a Bearer token.
+#### 5. Cron job
+
+`apps/mcp/vercel.json` configures a weekly cron at `0 0 * * 0` (Sundays midnight UTC) that calls `/api/cron/sync`. Vercel automatically provides `CRON_SECRET` and sends it as a Bearer token — no additional setup needed.
+
+---
+
+### Project 2 — `apps/web` (optional demo UI)
+
+This is the demo front-end. It reads from the same Neon database as `apps/mcp`.
+
+#### 1. Create the Vercel project
+
+1. Import the **same fork** to a second Vercel project
+2. Under **Root Directory**, enter `apps/web`
+
+#### 2. Connect the same database
+
+You can either:
+- **Share the existing integration:** in the Neon integration settings, attach it to the `web` project too (Vercel will inject `POSTGRES_URL` automatically), or
+- **Copy the value manually:** paste the same `POSTGRES_URL` from the `mcp` project into the `web` project's environment variables.
+
+#### 3. Set environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key |
+| `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project |
+| `NEXT_PUBLIC_MCP_URL` | ✅ | Full URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) |
+| `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
+
+`CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`).
+
+---
+
+### `vercel.json` reference
+
+| File | Used by | Purpose |
+|------|---------|---------|
+| `apps/mcp/vercel.json` | `apps/mcp` Vercel project | Weekly cron at `/api/cron/sync` |
+| `vercel.json` (repo root) | `apps/web` Vercel project if root dir = repo root | Weekly cron at `/api/cron/sync` for the web app |
+
+Both route files set `export const maxDuration = 60` inline, so no additional function config is needed in `vercel.json`.
 
 ---
 
 ## MCP Client Setup
+
+The MCP endpoint is served by **`apps/mcp`** at `POST /api/mcp`.
 
 ### Claude Desktop
 
@@ -244,7 +313,7 @@ const def = await mcp.callTool('get_default_model', {});
 
 ## Database Schema
 
-> These tables are created in the **`mcp`** deployment's Postgres/Neon database (`apps/mcp`). The `web` app does not own or migrate any schema.
+> Both `apps/mcp` and `apps/web` connect to the **same** Neon Postgres database. Migration scripts live in `apps/web/scripts/` and are run via `pnpm db:migrate` from the repo root. `apps/mcp` owns the write operations (upsert models, record sync status); `apps/web` reads from the same tables.
 
 ```sql
 -- Cached model catalog from OpenRouter
@@ -311,14 +380,26 @@ Tests cover:
 
 ## Environment Variables Reference
 
+### `apps/mcp`
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | ✅ | OpenRouter API key for model fetching |
-| `POSTGRES_URL` | ✅ | Vercel Postgres connection string |
+| `POSTGRES_URL` | ✅ | Neon/Postgres connection string (auto-injected by Vercel) |
 | `ADMIN_SECRET` | ✅ | Token for admin endpoints |
 | `MCP_API_KEY` | ❌ | Token for MCP endpoint (open if unset) |
 | `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
-| `NEXT_PUBLIC_APP_URL` | ❌ | Public URL shown in MCP info page |
+
+### `apps/web`
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key for model fetching |
+| `POSTGRES_URL` | ✅ | Same Neon/Postgres connection string as the `mcp` project |
+| `ADMIN_SECRET` | ✅ | Token for admin endpoints |
+| `NEXT_PUBLIC_MCP_URL` | ✅ | Full URL of your deployed `mcp` app |
+| `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
+| `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
 
 ---
 
