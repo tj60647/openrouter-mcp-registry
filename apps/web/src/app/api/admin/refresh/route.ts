@@ -3,18 +3,19 @@ import { RefreshRequestSchema, ModelSyncService, OpenRouterProvider, logger } fr
 import { sql } from '@vercel/postgres';
 import type { Model } from '@openrouter-mcp/shared';
 import type { ModelRepository } from '@openrouter-mcp/shared';
+import { verifySessionToken, SESSION_COOKIE } from '../../../../lib/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-function validateAdminToken(req: NextRequest): NextResponse | null {
-  const token = req.headers.get('authorization')?.replace('Bearer ', '').trim();
-  const expected = process.env['ADMIN_SECRET'];
-  if (!expected) {
+async function validateAdminSession(req: NextRequest): Promise<NextResponse | null> {
+  const sessionSecret = process.env['ADMIN_SESSION_SECRET'];
+  if (!sessionSecret) {
     return NextResponse.json({ error: 'Admin auth not configured' }, { status: 503 });
   }
-  if (!token || token !== expected) {
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  if (!token || !(await verifySessionToken(token, sessionSecret))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   return null;
@@ -89,7 +90,7 @@ function createWebModelRepository(): ModelRepository {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const authError = validateAdminToken(req);
+  const authError = await validateAdminSession(req);
   if (authError) return authError;
 
   try {

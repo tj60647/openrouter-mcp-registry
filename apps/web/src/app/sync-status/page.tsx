@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import type { SyncStatus } from '@openrouter-mcp/shared';
 
 interface SyncStatusResponse {
@@ -11,9 +12,9 @@ export default function SyncStatusPage() {
   const [data, setData] = useState<SyncStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [adminToken, setAdminToken] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
+  const router = useRouter();
 
   async function fetchStatus() {
     setLoading(true);
@@ -31,19 +32,12 @@ export default function SyncStatusPage() {
   }
 
   async function triggerRefresh() {
-    if (!adminToken) {
-      setRefreshResult('Admin token required');
-      return;
-    }
     setRefreshing(true);
     setRefreshResult(null);
     try {
       const res = await fetch('/api/admin/refresh', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true }),
       });
       const json = await res.json() as Record<string, unknown>;
@@ -57,12 +51,17 @@ export default function SyncStatusPage() {
     }
   }
 
+  async function handleLogout() {
+    await fetch('/api/admin/logout', { method: 'POST' });
+    router.push('/admin/login');
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void triggerRefresh();
   }
 
-  useEffect(() => { fetchStatus(); }, []);
+  useEffect(() => { void fetchStatus(); }, []);
 
   function formatDate(d: Date | string | null) {
     if (!d) return 'Never';
@@ -71,11 +70,19 @@ export default function SyncStatusPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Sync Status</h1>
-        <p style={{ color: 'var(--text-muted)' }}>
-          Current state of the model catalog sync from OpenRouter.
-        </p>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1>Sync Status</h1>
+          <p style={{ color: 'var(--text-muted)' }}>
+            Current state of the model catalog sync from OpenRouter.
+          </p>
+        </div>
+        <button
+          onClick={() => { void handleLogout(); }}
+          style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', marginTop: '0.25rem' }}
+        >
+          Sign out
+        </button>
       </div>
 
       {error && <div className="error-msg">{error}</div>}
@@ -119,16 +126,9 @@ export default function SyncStatusPage() {
       <div className="card">
         <h3>Manual Refresh</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Trigger a manual sync from OpenRouter. Requires admin token.
+          Trigger a manual sync from OpenRouter.
         </p>
         <form className="stack" style={{ marginTop: '1rem' }} onSubmit={handleSubmit}>
-          <input
-            type="password"
-            placeholder="Admin token (ADMIN_SECRET env var)"
-            value={adminToken}
-            onChange={(e) => setAdminToken(e.target.value)}
-            style={{ maxWidth: 400 }}
-          />
           <button type="submit" disabled={refreshing} style={{ maxWidth: 200 }}>
             {refreshing ? 'Syncing...' : '↻ Trigger Refresh'}
           </button>
