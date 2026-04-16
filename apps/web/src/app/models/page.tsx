@@ -15,15 +15,29 @@ export default function ModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState('');
+  const [modelQuery, setModelQuery] = useState('');
+  const [debouncedModelQuery, setDebouncedModelQuery] = useState('');
   const [offset, setOffset] = useState(0);
   const limit = 50;
 
-  const fetchModels = useCallback(async () => {
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedModelQuery(modelQuery.trim());
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [modelQuery]);
+
+  const fetchModels = useCallback(async (searchText = debouncedModelQuery) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-      if (provider) params.set('provider', provider);
+      const normalizedProvider = provider.trim();
+      if (normalizedProvider) params.set('provider', normalizedProvider);
+      if (searchText) params.set('query', searchText);
       const res = await fetch(`/api/models?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as ModelsResponse;
@@ -33,7 +47,7 @@ export default function ModelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [provider, offset]);
+  }, [provider, debouncedModelQuery, offset]);
 
   useEffect(() => { fetchModels(); }, [fetchModels]);
 
@@ -42,19 +56,26 @@ export default function ModelsPage() {
       <div>
         <h1>Models</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          All models cached from OpenRouter. Refresh via sync to update.
+          All models cached from OpenRouter. Filter by exact provider and search model IDs or display names.
         </p>
       </div>
 
-      <div className="row">
+      <div className="row" style={{ flexWrap: 'wrap' }}>
         <input
           type="text"
-          placeholder="Filter by provider (e.g. anthropic)"
+          placeholder="Provider (exact, e.g. google)"
           value={provider}
           onChange={(e) => { setProvider(e.target.value); setOffset(0); }}
+          style={{ maxWidth: 220 }}
+        />
+        <input
+          type="text"
+          placeholder="Search model name or ID (e.g. gemini)"
+          value={modelQuery}
+          onChange={(e) => { setModelQuery(e.target.value); setOffset(0); }}
           style={{ maxWidth: 300 }}
         />
-        <button onClick={() => fetchModels()}>Refresh</button>
+        <button onClick={() => fetchModels(modelQuery.trim())}>Refresh</button>
       </div>
 
       {error && <div className="error-msg">{error}</div>}
