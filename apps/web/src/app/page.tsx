@@ -1,4 +1,31 @@
 import Link from 'next/link';
+import MermaidDiagram from '../components/MermaidDiagram';
+
+const architectureChart = `
+flowchart LR
+  subgraph Web["Vercel Deployment: web"]
+    WebApp["apps/web<br/>Next.js demo UI"]
+  end
+
+  subgraph Mcp["Vercel Deployment: mcp"]
+    McpApp["apps/mcp<br/>Next.js MCP + REST"]
+    Database[("Vercel Postgres<br/>models<br/>aliases<br/>sync_status")]
+    Cron["Scheduled sync job"]
+  end
+
+  Shared["packages/shared<br/>types + services"]
+  OpenRouter["OpenRouter API"]
+  Clients["AI clients / coding agents"]
+
+  Shared --> WebApp
+  Shared --> McpApp
+  WebApp --> Database
+  McpApp --> Database
+  Clients --> McpApp
+  Cron --> OpenRouter
+  OpenRouter --> Cron
+  Cron --> Database
+`.trim();
 
 export default function HomePage() {
   const mcpUrl = process.env['NEXT_PUBLIC_MCP_URL'] ?? 'https://your-mcp-app.vercel.app';
@@ -39,26 +66,7 @@ export default function HomePage() {
 
       <div className="card">
         <h2>Architecture</h2>
-        <pre>{`
-┌──────────────────────────────┐  ┌──────────────────────────────┐
-│   Vercel Deployment (web)    │  │   Vercel Deployment (mcp)    │
-│                              │  │                              │
-│  ┌──────────────┐            │  │  ┌──────────────┐            │
-│  │  apps/web    │            │  │  │  apps/mcp    │            │
-│  │  (Next.js)   │            │  │  │  (Next.js)   │            │
-│  │  Demo UI     │            │  │  │  MCP + REST  │            │
-│  └──────────────┘            │  │  └──────┬───────┘            │
-│                              │  │         │                    │
-└──────────────────────────────┘  │  ┌──────▼────────┐          │
-                                  │  │ Vercel Postgres│          │
-  packages/shared ────────────────▶  │ models         │          │
-  (Types, services)               │  │ aliases        │          │
-                                  │  │ sync_status    │          │
-                                  │  └───────────────┘           │
-                                  │                              │
-                                  │  Cron ──▶ OpenRouter API     │
-                                  └──────────────────────────────┘
-        `.trim()}</pre>
+        <MermaidDiagram chart={architectureChart} title="OpenRouter MCP registry architecture" />
       </div>
 
       <div className="grid-2">
