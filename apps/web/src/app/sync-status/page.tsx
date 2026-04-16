@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { SyncStatus } from '@openrouter-mcp/shared';
 
 interface SyncStatusResponse {
@@ -55,6 +55,11 @@ export default function SyncStatusPage() {
     } finally {
       setRefreshing(false);
     }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void triggerRefresh();
   }
 
   useEffect(() => { fetchStatus(); }, []);
@@ -116,7 +121,7 @@ export default function SyncStatusPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
           Trigger a manual sync from OpenRouter. Requires admin token.
         </p>
-        <div className="stack" style={{ marginTop: '1rem' }}>
+        <form className="stack" style={{ marginTop: '1rem' }} onSubmit={handleSubmit}>
           <input
             type="password"
             placeholder="Admin token (ADMIN_SECRET env var)"
@@ -124,17 +129,13 @@ export default function SyncStatusPage() {
             onChange={(e) => setAdminToken(e.target.value)}
             style={{ maxWidth: 400 }}
           />
-          <button
-            onClick={triggerRefresh}
-            disabled={refreshing}
-            style={{ maxWidth: 200 }}
-          >
+          <button type="submit" disabled={refreshing} style={{ maxWidth: 200 }}>
             {refreshing ? 'Syncing...' : '↻ Trigger Refresh'}
           </button>
           {refreshResult && (
             <pre style={{ fontSize: '0.8rem' }}>{refreshResult}</pre>
           )}
-        </div>
+        </form>
       </div>
     </div>
   );
