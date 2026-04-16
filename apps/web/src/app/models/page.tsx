@@ -19,23 +19,25 @@ export default function ModelsPage() {
   const [debouncedModelQuery, setDebouncedModelQuery] = useState('');
   const [offset, setOffset] = useState(0);
   const limit = 50;
+  const normalizedProvider = provider.trim();
+  const normalizedModelQuery = modelQuery.trim();
+  const hasActiveFilters = normalizedProvider.length > 0 || normalizedModelQuery.length > 0;
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      setDebouncedModelQuery(modelQuery.trim());
+      setDebouncedModelQuery(normalizedModelQuery);
     }, 250);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [modelQuery]);
+  }, [normalizedModelQuery]);
 
   const fetchModels = useCallback(async (searchText = debouncedModelQuery) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-      const normalizedProvider = provider.trim();
       if (normalizedProvider) params.set('provider', normalizedProvider);
       if (searchText) params.set('query', searchText);
       const res = await fetch(`/api/models?${params}`);
@@ -47,7 +49,14 @@ export default function ModelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [provider, debouncedModelQuery, offset]);
+  }, [debouncedModelQuery, normalizedProvider, offset]);
+
+  function clearFilters() {
+    setProvider('');
+    setModelQuery('');
+    setDebouncedModelQuery('');
+    setOffset(0);
+  }
 
   useEffect(() => { fetchModels(); }, [fetchModels]);
 
@@ -75,7 +84,8 @@ export default function ModelsPage() {
           onChange={(e) => { setModelQuery(e.target.value); setOffset(0); }}
           style={{ maxWidth: 300 }}
         />
-        <button onClick={() => fetchModels(modelQuery.trim())}>Refresh</button>
+        <button onClick={() => fetchModels(normalizedModelQuery)}>Refresh</button>
+        <button disabled={!hasActiveFilters} onClick={clearFilters}>Clear Filters</button>
       </div>
 
       {error && <div className="error-msg">{error}</div>}
@@ -84,7 +94,11 @@ export default function ModelsPage() {
       {data && !loading && (
         <>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Showing {data.offset + 1}–{data.offset + data.models.length} of {data.count} total
+            {data.count > 0
+              ? `Showing ${data.offset + 1}–${data.offset + data.models.length} of ${data.count} total`
+              : 'Showing 0 of 0 total'}
+            {normalizedProvider ? ` for provider "${normalizedProvider}"` : ''}
+            {normalizedModelQuery ? `${normalizedProvider ? ' and' : ' for'} matching "${normalizedModelQuery}"` : ''}
           </p>
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <table>
