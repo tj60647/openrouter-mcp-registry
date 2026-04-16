@@ -10,11 +10,16 @@ interface ModelsResponse {
   offset: number;
 }
 
+interface ProvidersResponse {
+  providers: string[];
+}
+
 export default function ModelsPage() {
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState('');
+  const [providers, setProviders] = useState<string[]>([]);
   const [modelQuery, setModelQuery] = useState('');
   const [debouncedModelQuery, setDebouncedModelQuery] = useState('');
   const [offset, setOffset] = useState(0);
@@ -22,6 +27,21 @@ export default function ModelsPage() {
   const normalizedProvider = provider.trim();
   const normalizedModelQuery = modelQuery.trim();
   const hasActiveFilters = normalizedProvider.length > 0 || normalizedModelQuery.length > 0;
+
+  useEffect(() => {
+    async function fetchProviders() {
+      try {
+        const res = await fetch('/api/providers');
+        if (res.ok) {
+          const json = await res.json() as ProvidersResponse;
+          setProviders(json.providers);
+        }
+      } catch (e) {
+        console.error('Failed to fetch providers list:', e);
+      }
+    }
+    void fetchProviders();
+  }, []);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -65,18 +85,21 @@ export default function ModelsPage() {
       <div>
         <h1>Models</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          All models cached from OpenRouter. Filter by exact provider and search model IDs or display names.
+          All models cached from OpenRouter. Filter by provider and search model IDs or display names.
         </p>
       </div>
 
       <div className="row" style={{ flexWrap: 'wrap' }}>
-        <input
-          type="text"
-          placeholder="Provider (exact, e.g. google)"
+        <select
           value={provider}
           onChange={(e) => { setProvider(e.target.value); setOffset(0); }}
           style={{ maxWidth: 220 }}
-        />
+        >
+          <option value="">All Providers</option>
+          {providers.map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
         <input
           type="text"
           placeholder="Search model name or ID (e.g. gemini)"

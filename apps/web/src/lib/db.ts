@@ -69,6 +69,15 @@ export async function getModelsCount(opts: {
   return Number(result.rows[0]?.count ?? 0);
 }
 
+export async function getProviders(): Promise<string[]> {
+  const result = await sql<{ provider: string }>`
+    SELECT DISTINCT provider FROM models
+    WHERE provider IS NOT NULL AND provider != ''
+    ORDER BY provider
+  `;
+  return result.rows.map((r) => r.provider);
+}
+
 export async function getSyncStatus(): Promise<SyncStatus | null> {
   const result = await sql<SyncStatusRow>`
     SELECT * FROM sync_status ORDER BY id DESC LIMIT 1
