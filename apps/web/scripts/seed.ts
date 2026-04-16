@@ -45,17 +45,6 @@ const SEED_MODELS = [
   },
 ];
 
-const SEED_ALIASES = [
-  { alias: 'auto', model_id: 'openrouter/auto' },
-  { alias: 'sonnet', model_id: 'anthropic/claude-sonnet-4-5' },
-  { alias: 'haiku', model_id: 'anthropic/claude-haiku-4-5' },
-  { alias: 'fast-general', model_id: 'anthropic/claude-haiku-4-5' },
-  { alias: 'best-general', model_id: 'anthropic/claude-sonnet-4-5' },
-  { alias: 'gpt-4o', model_id: 'openai/gpt-4o' },
-  { alias: 'gemini', model_id: 'google/gemini-pro-1.5' },
-  { alias: 'mistral', model_id: 'mistralai/mistral-large' },
-];
-
 async function seed() {
   console.log('Seeding database...');
 
@@ -70,14 +59,6 @@ async function seed() {
         '{}'
       )
       ON CONFLICT (id) DO NOTHING
-    `;
-  }
-
-  for (const alias of SEED_ALIASES) {
-    await sql`
-      INSERT INTO aliases (alias, model_id, scope)
-      VALUES (${alias.alias}, ${alias.model_id}, 'system')
-      ON CONFLICT (alias) DO NOTHING
     `;
   }
 

@@ -1,6 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ModelRegistry } from '../services/modelRegistry';
-import type { AliasLookup } from '../services/aliasService';
 import type { ModelLookup } from '../services/modelRegistry';
 import type { Model } from '../types/model';
 
@@ -16,41 +15,21 @@ const fakeModel: Model = {
 };
 
 describe('ModelRegistry', () => {
-  const makeRegistry = (
-    findById: (id: string) => Promise<Model | null>,
-    resolveAlias: (alias: string) => Promise<string | null>
-  ) => {
+  const makeRegistry = (findById: (id: string) => Promise<Model | null>) => {
     const modelLookup: ModelLookup = { findById };
-    const aliasLookup: AliasLookup = { resolveAlias };
-    return new ModelRegistry(modelLookup, aliasLookup);
+    return new ModelRegistry(modelLookup);
   };
 
-  it('resolves alias to model', async () => {
-    const registry = makeRegistry(
-      async () => fakeModel,
-      async (alias) => (alias === 'gpt-4o' ? 'openai/gpt-4o' : null)
-    );
-    const result = await registry.resolve('gpt-4o');
-    expect(result.source).toBe('alias');
+  it('resolves canonical ID directly', async () => {
+    const registry = makeRegistry(async () => fakeModel);
+    const result = await registry.resolve('openai/gpt-4o');
+    expect(result.source).toBe('canonical');
     expect(result.resolved).toBe('openai/gpt-4o');
     expect(result.model).toEqual(fakeModel);
   });
 
-  it('resolves canonical ID directly', async () => {
-    const registry = makeRegistry(
-      async () => fakeModel,
-      async () => null
-    );
-    const result = await registry.resolve('openai/gpt-4o');
-    expect(result.source).toBe('canonical');
-    expect(result.resolved).toBe('openai/gpt-4o');
-  });
-
   it('returns source=normalized for unknown non-canonical input', async () => {
-    const registry = makeRegistry(
-      async () => null,
-      async () => null
-    );
+    const registry = makeRegistry(async () => null);
     const result = await registry.resolve('unknown-thing');
     expect(result.source).toBe('normalized');
     expect(result.model).toBeNull();

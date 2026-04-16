@@ -84,20 +84,6 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
   return result.rows[0] ? rowToSyncStatus(result.rows[0]) : null;
 }
 
-export async function resolveAlias(alias: string): Promise<string | null> {
-  const result = await sql<{ model_id: string }>`
-    SELECT model_id FROM aliases WHERE alias = ${alias} LIMIT 1
-  `;
-  return result.rows[0]?.model_id ?? null;
-}
-
-export async function listDbAliases(): Promise<Record<string, string>> {
-  const result = await sql<{ alias: string; model_id: string }>`
-    SELECT alias, model_id FROM aliases ORDER BY alias
-  `;
-  return Object.fromEntries(result.rows.map((r) => [r.alias, r.model_id]));
-}
-
 export async function findModelsByCriteria(opts: {
   maxInputPricePer1k?: number;
   maxOutputPricePer1k?: number;

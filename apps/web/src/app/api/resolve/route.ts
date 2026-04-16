@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   ResolveInputSchema,
   ModelRegistry,
-  InMemoryAliasService,
-  SYSTEM_ALIASES,
 } from '@openrouter-mcp/shared';
 import { sql } from '@vercel/postgres';
 import type { ModelRow } from '@openrouter-mcp/shared';
@@ -26,19 +24,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return result.rows[0] ? rowToModel(result.rows[0]) : null;
     }
 
-    async function resolveDbAlias(alias: string): Promise<string | null> {
-      const result = await sql<{ model_id: string }>`
-        SELECT model_id FROM aliases WHERE alias = ${alias} LIMIT 1
-      `;
-      return result.rows[0]?.model_id ?? null;
-    }
-
-    const dbAlias = await resolveDbAlias(input);
-    const dbAliases = dbAlias ? { [input]: dbAlias } : {};
-    const combinedAliases = { ...SYSTEM_ALIASES, ...dbAliases };
-
-    const aliasService = new InMemoryAliasService(combinedAliases);
-    const registry = new ModelRegistry({ findById }, aliasService);
+    const registry = new ModelRegistry({ findById });
     const result = await registry.resolve(input);
 
     return NextResponse.json({

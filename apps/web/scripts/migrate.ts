@@ -21,15 +21,6 @@ async function migrate() {
   `;
 
   await sql`
-    CREATE TABLE IF NOT EXISTS aliases (
-      alias TEXT PRIMARY KEY,
-      model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-      scope TEXT NOT NULL DEFAULT 'system' CHECK (scope IN ('system', 'org')),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `;
-
-  await sql`
     CREATE TABLE IF NOT EXISTS sync_status (
       id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       last_successful_sync TIMESTAMPTZ,

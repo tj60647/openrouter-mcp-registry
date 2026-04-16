@@ -4,16 +4,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod';
 import {
   ModelRegistry,
-  InMemoryAliasService,
-  SYSTEM_ALIASES,
   logger,
 } from '@openrouter-mcp/shared';
 import {
   getModels,
   getModelById,
   getSyncStatus,
-  resolveAlias,
-  listDbAliases,
   findModelsByCriteria,
 } from '../../../lib/db';
 import { validateMcpToken } from '../../../lib/auth';
@@ -58,18 +54,13 @@ function createMcpServer(): McpServer {
   // Tool: resolve_model
   server.tool(
     'resolve_model',
-    'Resolve a model alias or ID to its canonical form',
+    'Resolve a model ID to its canonical form and fetch its details',
     {
       input: z.string().min(1).max(256),
     },
     async ({ input }) => {
       try {
-        const dbAlias = await resolveAlias(input);
-        const dbAliases = dbAlias ? { [input]: dbAlias } : {};
-        const combinedAliases = { ...SYSTEM_ALIASES, ...dbAliases };
-
-        const aliasService = new InMemoryAliasService(combinedAliases);
-        const registry = new ModelRegistry({ findById: getModelById }, aliasService);
+        const registry = new ModelRegistry({ findById: getModelById });
         const result = await registry.resolve(input);
 
         return {
@@ -112,38 +103,6 @@ function createMcpServer(): McpServer {
             {
               type: 'text',
               text: JSON.stringify({ found: model !== null, model }, null, 2),
-            },
-          ],
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
-      }
-    }
-  );
-
-  // Tool: list_aliases
-  server.tool(
-    'list_aliases',
-    'List all known model aliases (system built-ins and any custom DB overrides). Use this to discover shorthand names you can pass to resolve_model.',
-    {},
-    async () => {
-      try {
-        const dbAliases = await listDbAliases();
-        // DB aliases override system aliases for the same key
-        const merged = { ...SYSTEM_ALIASES, ...dbAliases };
-        const entries = Object.entries(merged).map(([alias, modelId]) => ({
-          alias,
-          modelId,
-          source: Object.prototype.hasOwnProperty.call(dbAliases, alias)
-            ? 'database'
-            : 'system',
-        }));
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ aliases: entries, count: entries.length }, null, 2),
             },
           ],
         };
@@ -344,7 +303,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       'list_models',
       'resolve_model',
       'get_model',
-      'list_aliases',
       'search_models',
       'find_models_by_criteria',
       'compare_models',

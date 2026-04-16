@@ -2,10 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   ResolveInputSchema,
   ModelRegistry,
-  InMemoryAliasService,
-  SYSTEM_ALIASES,
 } from '@openrouter-mcp/shared';
-import { getModelById, resolveAlias } from '../../../lib/db';
+import { getModelById } from '../../../lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,18 +17,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     const { input } = parsed.data;
 
-    // Build a registry that checks DB aliases first, then system aliases
-    const dbAlias = await resolveAlias(input);
-    const dbAliases = dbAlias ? { [input]: dbAlias } : {};
-    const combinedAliases = { ...SYSTEM_ALIASES, ...dbAliases };
-
-    const aliasService = new InMemoryAliasService(combinedAliases);
-    const registry = new ModelRegistry(
-      { findById: getModelById },
-      aliasService
-    );
-
+    const registry = new ModelRegistry({ findById: getModelById });
     const result = await registry.resolve(input);
+
     return NextResponse.json({
       input,
       resolved: result.resolved,
