@@ -5,6 +5,7 @@ import NavBar from '../components/NavBar';
 export const metadata: Metadata = {
   title: 'OpenRouter MCP Registry',
   description: 'A centralized MCP model registry backed by OpenRouter',
+  icons: { icon: '/icon.svg', shortcut: '/icon.svg' },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

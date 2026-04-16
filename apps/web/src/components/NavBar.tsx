@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import RegistryIcon from './RegistryIcon';
 
 const links = [
   { href: '/', label: 'Home' },
@@ -16,7 +17,10 @@ export default function NavBar() {
   return (
     <nav>
       <div className="nav-inner">
-        <Link href="/" className="brand">🔄 MCP Registry</Link>
+        <Link href="/" className="brand">
+          <RegistryIcon size={22} />
+          MCP Registry
+        </Link>
         <ul className="links">
           {links.map((link) => (
             <li key={link.href}>
