@@ -9,8 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
-    "db:seed": "node --loader ts-node/esm scripts/seed.ts"
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/seed.mjs"
   },
   "dependencies": {
     "@openrouter-mcp/shared": "workspace:*",
@@ -24,7 +24,6 @@
     "@types/node": "^20.12.7",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
-    "ts-node": "^10.9.2",
     "typescript": "^5.4.5",
     "vitest": "^1.5.3",
     "eslint": "^8.57.0",

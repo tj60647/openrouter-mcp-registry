@@ -7,13 +7,13 @@
     "pnpm": ">=9"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter './apps/*' dev",
-    "build": "pnpm --filter './packages/*' build && pnpm --filter './apps/*' build",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "db:migrate": "pnpm --filter './apps/web' db:migrate",
-    "db:seed": "pnpm --filter './apps/web' db:seed",
+    "dev": "npx -y pnpm --parallel --filter @openrouter-mcp/web --filter @openrouter-mcp/mcp dev",
+    "build": "npx -y pnpm --filter @openrouter-mcp/shared build && npx -y pnpm --filter @openrouter-mcp/web build && npx -y pnpm --filter @openrouter-mcp/mcp build",
+    "lint": "npx -y pnpm -r lint",
+    "typecheck": "npx -y pnpm -r typecheck",
+    "test": "npx -y pnpm -r test",
+    "db:migrate": "npx -y pnpm --filter @openrouter-mcp/web db:migrate",
+    "db:seed": "npx -y pnpm --filter @openrouter-mcp/web db:seed",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore"
   },
   "devDependencies": {
