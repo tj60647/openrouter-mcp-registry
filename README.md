@@ -20,25 +20,26 @@ This registry solves all three problems:
 
 ## Architecture
 
-```
-┌──────────────────────────────┐  ┌──────────────────────────────┐
-│   Vercel Deployment (web)    │  │   Vercel Deployment (mcp)    │
-│                              │  │                              │
-│  ┌──────────────┐            │  │  ┌──────────────┐            │
-│  │  apps/web    │            │  │  │  apps/mcp    │            │
-│  │  (Next.js)   │            │  │  │  (Next.js)   │            │
-│  │  Demo UI     │            │  │  │  MCP + REST  │            │
-│  └──────────────┘            │  │  └──────┬───────┘            │
-│                              │  │         │                    │
-└──────────────────────────────┘  │  ┌──────▼────────┐          │
-                                  │  │ Vercel Postgres│          │
-  packages/shared ────────────────▶  │ models         │          │
-  (Types, services)               │  │ aliases        │          │
-                                  │  │ sync_status    │          │
-                                  │  └───────────────┘           │
-                                  │                              │
-                                  │  Cron ──▶ OpenRouter API     │
-                                  └──────────────────────────────┘
+```mermaid
+graph TD
+    shared["packages/shared\nTypes · Services"]
+
+    subgraph web_deploy["Vercel Deployment · web"]
+        webApp["apps/web\nNext.js · Demo UI"]
+    end
+
+    subgraph mcp_deploy["Vercel Deployment · mcp"]
+        mcpApp["apps/mcp\nNext.js · MCP + REST"]
+        db[("Vercel Postgres\nmodels · aliases · sync_status")]
+        cron["Cron (weekly)"]
+    end
+
+    openrouter["OpenRouter API"]
+
+    shared -.->|shared code| webApp
+    shared -.->|shared code| mcpApp
+    mcpApp --> db
+    cron -->|sync| openrouter
 ```
 
 ### Monorepo layout
