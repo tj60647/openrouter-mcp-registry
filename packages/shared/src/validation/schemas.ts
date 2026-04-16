@@ -6,12 +6,6 @@ export const ModelIdSchema = z
   .max(256)
   .regex(/^[a-zA-Z0-9/_:.-]+$/, 'Invalid model ID format');
 
-export const AliasSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid alias format');
-
 export const ResolveInputSchema = z.object({
   input: z.string().min(1).max(256),
 });

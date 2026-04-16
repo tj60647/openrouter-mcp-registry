@@ -84,11 +84,37 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
   return result.rows[0] ? rowToSyncStatus(result.rows[0]) : null;
 }
 
-export async function resolveAlias(alias: string): Promise<string | null> {
-  const result = await sql<{ model_id: string }>`
-    SELECT model_id FROM aliases WHERE alias = ${alias} LIMIT 1
-  `;
-  return result.rows[0]?.model_id ?? null;
+export async function findModelsByCriteria(opts: {
+  maxInputPricePer1k?: number;
+  maxOutputPricePer1k?: number;
+  minContextLength?: number;
+  limit: number;
+  offset: number;
+}): Promise<Model[]> {
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset } = opts;
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (maxInputPricePer1k != null) {
+    params.push(maxInputPricePer1k);
+    conditions.push(`(input_price_per_1k IS NULL OR input_price_per_1k <= $${params.length})`);
+  }
+  if (maxOutputPricePer1k != null) {
+    params.push(maxOutputPricePer1k);
+    conditions.push(`(output_price_per_1k IS NULL OR output_price_per_1k <= $${params.length})`);
+  }
+  if (minContextLength != null) {
+    params.push(minContextLength);
+    conditions.push(`context_length >= $${params.length}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit, offset);
+  const query = `SELECT * FROM models ${where} ORDER BY id LIMIT $${params.length - 1} OFFSET $${params.length}`;
+
+  const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
+  return result.rows.map(rowToModel);
 }
 
 export function createModelRepository(): ModelRepository {
