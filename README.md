@@ -105,7 +105,7 @@ Connect any MCP-compatible client to `POST /api/mcp`:
 
 - Node.js ≥ 20
 - pnpm ≥ 9 (`npm install -g pnpm`)
-- A [Vercel Postgres](https://vercel.com/docs/storage/vercel-postgres) database (or local Postgres)
+- A [Neon](https://neon.tech) or local Postgres database (Vercel provisions Neon automatically on deploy)
 - An [OpenRouter](https://openrouter.ai) API key
 
 ### Setup
@@ -154,10 +154,14 @@ pnpm dev
 2. Go to [vercel.com/new](https://vercel.com/new) and import your fork
 3. Select `apps/web` as the root directory (or deploy both apps separately)
 
-### 2. Add Vercel Postgres
+### 2. Add Vercel Postgres (mcp project only)
 
-1. In your Vercel project dashboard → **Storage** → **Create Database** → **Postgres**
-2. Vercel will automatically inject `POSTGRES_URL` and related env vars
+> **Note:** `@vercel/postgres` is deprecated. Vercel now provisions **Neon** as a native integration via the Vercel Marketplace. If you are setting up a new database, select **Neon** from the Marketplace — `POSTGRES_URL` and the `@vercel/postgres` SDK continue to work with Neon without any code changes.
+
+Add the database to the **`mcp`** Vercel project (not `web` — only `apps/mcp` uses the database):
+
+1. Open the **`mcp`** project in your Vercel dashboard → **Storage** → **Connect Database** → **Create New** → **Neon** (or **Postgres** if still available)
+2. Vercel will automatically inject `POSTGRES_URL` and related env vars into the `mcp` project
 
 ### 3. Set environment variables
 
@@ -239,6 +243,8 @@ const def = await mcp.callTool('get_default_model', {});
 ---
 
 ## Database Schema
+
+> These tables are created in the **`mcp`** deployment's Postgres/Neon database (`apps/mcp`). The `web` app does not own or migrate any schema.
 
 ```sql
 -- Cached model catalog from OpenRouter
