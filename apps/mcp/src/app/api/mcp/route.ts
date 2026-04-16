@@ -13,6 +13,8 @@ import {
   getModelById,
   getSyncStatus,
   resolveAlias,
+  listDbAliases,
+  findModelsByCriteria,
 } from '../../../lib/db';
 import { validateMcpToken } from '../../../lib/auth';
 
@@ -28,15 +30,16 @@ function createMcpServer(): McpServer {
   // Tool: list_models
   server.tool(
     'list_models',
-    'List all available models in the registry',
+    'List available models in the registry with optional filtering. Use the query param to search by name, ID, or provider.',
     {
       limit: z.number().int().min(1).max(500).optional().default(100),
       offset: z.number().int().min(0).optional().default(0),
       provider: z.string().optional(),
+      query: z.string().optional().describe('Text search across model ID, display name, and provider'),
     },
-    async ({ limit, offset, provider }) => {
+    async ({ limit, offset, provider, query }) => {
       try {
-        const models = await getModels({ limit, offset, provider });
+        const models = await getModels({ limit, offset, provider, query });
         return {
           content: [
             {
@@ -94,30 +97,21 @@ function createMcpServer(): McpServer {
     }
   );
 
-  // Tool: get_default_model
+  // Tool: get_model
   server.tool(
-    'get_default_model',
-    'Get the default model (resolves the "best-general" alias)',
-    {},
-    async () => {
+    'get_model',
+    'Get full details for a single model by its canonical ID (e.g. "anthropic/claude-sonnet-4-5")',
+    {
+      id: z.string().min(1).max(256).describe('Canonical model ID'),
+    },
+    async ({ id }) => {
       try {
-        const aliasService = new InMemoryAliasService(SYSTEM_ALIASES);
-        const registry = new ModelRegistry({ findById: getModelById }, aliasService);
-        const result = await registry.resolve('best-general');
-
+        const model = await getModelById(id);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
-                  resolved: result.resolved,
-                  source: result.source,
-                  model: result.model,
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify({ found: model !== null, model }, null, 2),
             },
           ],
         };
@@ -128,10 +122,164 @@ function createMcpServer(): McpServer {
     }
   );
 
-  // Tool: get_sync_status
+  // Tool: list_aliases
   server.tool(
-    'get_sync_status',
-    'Get the current sync status of the model registry',
+    'list_aliases',
+    'List all known model aliases (system built-ins and any custom DB overrides). Use this to discover shorthand names you can pass to resolve_model.',
+    {},
+    async () => {
+      try {
+        const dbAliases = await listDbAliases();
+        // DB aliases override system aliases for the same key
+        const merged = { ...SYSTEM_ALIASES, ...dbAliases };
+        const entries = Object.entries(merged).map(([alias, modelId]) => ({
+          alias,
+          modelId,
+          source: Object.prototype.hasOwnProperty.call(dbAliases, alias)
+            ? 'database'
+            : 'system',
+        }));
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ aliases: entries, count: entries.length }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // Tool: search_models
+  server.tool(
+    'search_models',
+    'Search for models by name, ID, or provider substring. Returns matching models sorted by ID.',
+    {
+      query: z.string().min(1).max(256).describe('Search term to match against model ID, display name, or provider'),
+      limit: z.number().int().min(1).max(100).optional().default(20),
+      offset: z.number().int().min(0).optional().default(0),
+    },
+    async ({ query, limit, offset }) => {
+      try {
+        const models = await getModels({ limit, offset, query });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ models, count: models.length }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // Tool: find_models_by_criteria
+  server.tool(
+    'find_models_by_criteria',
+    'Filter models by budget and context constraints. All parameters are optional — omit any you don\'t care about. Models with NULL prices are always included (treated as free/unknown).',
+    {
+      maxInputPricePer1k: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe('Maximum input price per 1,000 tokens (USD)'),
+      maxOutputPricePer1k: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe('Maximum output price per 1,000 tokens (USD)'),
+      minContextLength: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Minimum context window size in tokens'),
+      limit: z.number().int().min(1).max(200).optional().default(50),
+      offset: z.number().int().min(0).optional().default(0),
+    },
+    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset }) => {
+      try {
+        const models = await findModelsByCriteria({
+          maxInputPricePer1k,
+          maxOutputPricePer1k,
+          minContextLength,
+          limit,
+          offset,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ models, count: models.length }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // Tool: compare_models
+  server.tool(
+    'compare_models',
+    'Compare 2–5 models side-by-side on pricing, context length, and metadata. Pass canonical model IDs.',
+    {
+      ids: z
+        .array(z.string().min(1).max(256))
+        .min(2)
+        .max(5)
+        .describe('Array of 2–5 canonical model IDs to compare'),
+    },
+    async ({ ids }) => {
+      try {
+        const results = await Promise.all(
+          ids.map(async (id) => {
+            const model = await getModelById(id);
+            return { id, found: model !== null, model };
+          })
+        );
+
+        // Build a condensed comparison table
+        const comparison = results.map(({ id, found, model }) => ({
+          id,
+          found,
+          displayName: model?.displayName ?? null,
+          provider: model?.provider ?? null,
+          contextLength: model?.contextLength ?? null,
+          inputPricePer1k: model?.inputPricePer1k ?? null,
+          outputPricePer1k: model?.outputPricePer1k ?? null,
+          metadata: model?.metadata ?? null,
+        }));
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ comparison }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // Tool: get_registry_status
+  server.tool(
+    'get_registry_status',
+    'Get the current sync status of the model registry (last sync time, record count, any errors)',
     {},
     async () => {
       try {
@@ -192,7 +340,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     name: 'openrouter-mcp-registry',
     version: '1.0.0',
     description: 'MCP server for OpenRouter model registry',
-    tools: ['list_models', 'resolve_model', 'get_default_model', 'get_sync_status'],
+    tools: [
+      'list_models',
+      'resolve_model',
+      'get_model',
+      'list_aliases',
+      'search_models',
+      'find_models_by_criteria',
+      'compare_models',
+      'get_registry_status',
+    ],
     transport: 'streamable-http',
     endpoint: '/api/mcp',
   });
