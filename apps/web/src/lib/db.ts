@@ -14,69 +14,25 @@ export async function findModelsByCriteria(opts: {
   limit: number;
   offset: number;
 }): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset } = opts;
+  const {
+    maxInputPricePer1k = null,
+    maxOutputPricePer1k = null,
+    minContextLength = null,
+    limit,
+    offset,
+  } = opts;
 
-  // Build query dynamically; models with NULL prices are treated as no-cost / unknown
-  if (maxInputPricePer1k !== undefined && maxOutputPricePer1k !== undefined && minContextLength !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
-        AND (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
-        AND (context_length IS NULL OR context_length >= ${minContextLength})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (maxInputPricePer1k !== undefined && maxOutputPricePer1k !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
-        AND (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (maxInputPricePer1k !== undefined && minContextLength !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
-        AND (context_length IS NULL OR context_length >= ${minContextLength})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (maxOutputPricePer1k !== undefined && minContextLength !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
-        AND (context_length IS NULL OR context_length >= ${minContextLength})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (maxInputPricePer1k !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (maxOutputPricePer1k !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else if (minContextLength !== undefined) {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE (context_length IS NULL OR context_length >= ${minContextLength})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  } else {
-    const result = await sql<ModelRow>`
-      SELECT * FROM models ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-    return result.rows.map(rowToModel);
-  }
+  // When a parameter is null the condition is bypassed (IS NULL short-circuits).
+  // Models with NULL prices are treated as free / unknown (always pass the filter).
+  const result = await sql<ModelRow>`
+    SELECT * FROM models
+    WHERE
+      (${maxInputPricePer1k}::numeric IS NULL OR input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+      AND (${maxOutputPricePer1k}::numeric IS NULL OR output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+      AND (${minContextLength}::integer IS NULL OR context_length IS NULL OR context_length >= ${minContextLength})
+    ORDER BY id LIMIT ${limit} OFFSET ${offset}
+  `;
+  return result.rows.map(rowToModel);
 }
 
 export async function getModels(opts: {

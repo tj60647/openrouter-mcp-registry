@@ -221,6 +221,8 @@ const SYSTEM_PROMPT =
   `You help users explore, search, and compare AI models available through OpenRouter. ` +
   `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
 
+const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
+
 export async function POST(req: Request): Promise<Response> {
   const apiKey = process.env['OPENROUTER_API_KEY'];
   if (!apiKey) {
@@ -252,7 +254,7 @@ export async function POST(req: Request): Promise<Response> {
         'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4o-mini',
+        model: CHAT_MODEL,
         messages,
         tools: TOOL_DEFINITIONS,
         tool_choice: 'auto',
