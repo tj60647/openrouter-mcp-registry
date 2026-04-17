@@ -3,6 +3,7 @@ import { RefreshRequestSchema, ModelSyncService, OpenRouterProvider } from '@ope
 import { createModelRepository } from '../../../../lib/db';
 import { validateAdminToken } from '../../../../lib/auth';
 import { logger } from '@openrouter-mcp/shared';
+import { generatePendingEmbeddings } from '../../../../lib/embeddings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     logger.info('Manual refresh triggered', { force: parsed.data.force });
     const result = await syncService.sync({ force: parsed.data.force });
+
+    // Generate embeddings for any models that now have a description but no vector yet.
+    // Uses OPENROUTER_API_KEY (already required above) to call openai/text-embedding-3-small via OpenRouter.
+    if (result.success) {
+      const embeddingsGenerated = await generatePendingEmbeddings(apiKey);
+      logger.info('Embeddings generated', { embeddingsGenerated });
+      return NextResponse.json({ ...result, embeddingsGenerated });
+    }
 
     return NextResponse.json(result);
   } catch (err) {

@@ -100,12 +100,13 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query` |
+| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy` |
 | `resolve_model` | Resolve and look up a model by ID | `input: string` |
 | `get_model` | Get full details for a model | `id: string` |
-| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset` |
-| `find_models_by_criteria` | Filter by budget and context | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `limit`, `offset` |
+| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset`, `sortBy` |
+| `find_models_by_criteria` | Filter by budget, context, and modality | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy` |
 | `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
+| `semantic_search` | Find models by natural language similarity | `query: string`, `limit`, `offset` |
 | `get_registry_status` | Current sync state | — |
 
 ### Resources
@@ -210,7 +211,7 @@ In **Settings → Environment Variables**:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | Your [OpenRouter](https://openrouter.ai) API key |
+| `OPENROUTER_API_KEY` | ✅ | Your [OpenRouter](https://openrouter.ai) API key — used for model fetching and generating description embeddings |
 | `ADMIN_SECRET` | ✅ | Random secret for admin endpoints |
 | `MCP_API_KEY` | ❌ | Token to protect the MCP endpoint (open if unset) |
 
@@ -388,6 +389,19 @@ const affordable = await mcp.callTool('find_models_by_criteria', {
   limit: 20,
 });
 
+// Filter by modality — e.g. vision models that accept images
+const visionModels = await mcp.callTool('find_models_by_criteria', {
+  modality: 'text+image',
+  limit: 20,
+});
+
+// Semantic search — find models by natural language description
+// (uses OPENROUTER_API_KEY to call openai/text-embedding-3-small via OpenRouter)
+const semantic = await mcp.callTool('semantic_search', {
+  query: 'fast cheap summarization model with a large context window',
+  limit: 10,
+});
+
 // Compare 2–5 models side-by-side (pricing, context length, metadata)
 const comparison = await mcp.callTool('compare_models', {
   ids: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5'],
@@ -423,17 +437,30 @@ const comparePrompt = await mcp.getPrompt('compare_models_prompt', {
 > Both `apps/mcp` and `apps/web` connect to the **same** Neon Postgres database. Migration scripts live in `apps/web/scripts/` and are run via `pnpm db:migrate` from the repo root. `apps/mcp` owns the write operations (upsert models, record sync status); `apps/web` reads from the same tables.
 
 ```sql
+-- Enable pgvector (required for description_embedding)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Cached model catalog from OpenRouter
 CREATE TABLE models (
-  id                  TEXT PRIMARY KEY,
-  provider            TEXT NOT NULL,
-  display_name        TEXT NOT NULL,
-  context_length      INTEGER,
-  input_price_per_1k  NUMERIC(18,10),
-  output_price_per_1k NUMERIC(18,10),
-  metadata            JSONB NOT NULL DEFAULT '{}',
-  fetched_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                    TEXT PRIMARY KEY,
+  provider              TEXT NOT NULL,
+  display_name          TEXT NOT NULL,
+  description           TEXT,                    -- model description from OpenRouter
+  modality              TEXT,                    -- e.g. "text+image->text", "text->text"
+  context_length        INTEGER,
+  max_completion_tokens INTEGER,                 -- max output tokens
+  input_price_per_1k    NUMERIC(18,10),
+  output_price_per_1k   NUMERIC(18,10),
+  image_price_per_1k    NUMERIC(18,10),          -- image input pricing
+  created_at            TIMESTAMPTZ,             -- when the model was published on OpenRouter
+  metadata              JSONB NOT NULL DEFAULT '{}',
+  fetched_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  description_embedding vector(1536)             -- auto-generated via OpenRouter embeddings
 );
+
+-- HNSW index for fast cosine-similarity search on description embeddings
+CREATE INDEX models_embedding_hnsw_idx
+  ON models USING hnsw (description_embedding vector_cosine_ops);
 
 -- Singleton sync state row
 CREATE TABLE sync_status (
@@ -482,7 +509,7 @@ Tests cover:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key for model fetching |
+| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key — used for model fetching **and** generating description embeddings (`openai/text-embedding-3-small` via OpenRouter) |
 | `POSTGRES_URL` | ✅ | Neon/Postgres connection string (auto-injected by Vercel) |
 | `ADMIN_SECRET` | ✅ | Token for admin endpoints |
 | `MCP_API_KEY` | ❌ | Token for MCP endpoint (open if unset) |

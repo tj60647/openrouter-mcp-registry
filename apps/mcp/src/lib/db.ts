@@ -3,38 +3,55 @@ import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 import type { ModelRepository } from '@openrouter-mcp/shared';
 
+// Whitelist of allowed sort columns mapped to their SQL column names.
+// Used by getModels and findModelsByCriteria to prevent SQL injection.
+const SORT_COLUMN_MAP: Record<string, string> = {
+  id: 'id',
+  display_name: 'display_name',
+  provider: 'provider',
+  context_length: 'context_length',
+  max_completion_tokens: 'max_completion_tokens',
+  input_price_per_1k: 'input_price_per_1k',
+  output_price_per_1k: 'output_price_per_1k',
+  image_price_per_1k: 'image_price_per_1k',
+  created_at: 'created_at',
+};
+
+export type SortBy = keyof typeof SORT_COLUMN_MAP;
+
+function resolveOrderBy(sortBy?: string): string {
+  return SORT_COLUMN_MAP[sortBy ?? ''] ?? 'id';
+}
+
 export async function getModels(opts: {
   limit: number;
   offset: number;
   provider?: string;
   query?: string;
+  sortBy?: string;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query } = opts;
+  const { limit, offset, provider, query, sortBy } = opts;
   const likeQuery = query ? `%${query}%` : null;
-  let result;
-  if (provider && likeQuery) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE provider = ${provider}
-        AND (id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (provider) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models WHERE provider = ${provider}
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (likeQuery) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery}
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else {
-    result = await sql<ModelRow>`
-      SELECT * FROM models ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
+  const orderCol = resolveOrderBy(sortBy);
+
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (provider) {
+    params.push(provider);
+    conditions.push(`provider = $${params.length}`);
   }
+  if (likeQuery) {
+    params.push(likeQuery, likeQuery, likeQuery);
+    const n = params.length;
+    conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit, offset);
+  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
+
+  const result = await db.query<ModelRow>(queryStr, params);
   return result.rows.map(rowToModel);
 }
 
@@ -71,9 +88,10 @@ export async function getModelsCount(opts: {
 }
 
 export async function getModelById(id: string): Promise<Model | null> {
-  const result = await sql<ModelRow>`
-    SELECT * FROM models WHERE id = ${id} LIMIT 1
-  `;
+  const result = await db.query<ModelRow>(
+    'SELECT * FROM models WHERE LOWER(id) = LOWER($1) LIMIT 1',
+    [id]
+  );
   return result.rows[0] ? rowToModel(result.rows[0]) : null;
 }
 
@@ -88,10 +106,13 @@ export async function findModelsByCriteria(opts: {
   maxInputPricePer1k?: number;
   maxOutputPricePer1k?: number;
   minContextLength?: number;
+  modality?: string;
   limit: number;
   offset: number;
+  sortBy?: string;
 }): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset } = opts;
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy } = opts;
+  const orderCol = resolveOrderBy(sortBy);
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -108,12 +129,33 @@ export async function findModelsByCriteria(opts: {
     params.push(minContextLength);
     conditions.push(`context_length >= $${params.length}`);
   }
+  if (modality) {
+    params.push(`%${modality}%`);
+    conditions.push(`modality ILIKE $${params.length}`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
-  const query = `SELECT * FROM models ${where} ORDER BY id LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
   const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
+  return result.rows.map(rowToModel);
+}
+
+export async function semanticSearchModels(opts: {
+  embedding: number[];
+  limit: number;
+  offset: number;
+}): Promise<Model[]> {
+  const { embedding, limit, offset } = opts;
+  const embeddingLiteral = `[${embedding.join(',')}]`;
+  const result = await db.query<ModelRow>(
+    `SELECT * FROM models
+     WHERE description_embedding IS NOT NULL
+     ORDER BY description_embedding <=> $1
+     LIMIT $2 OFFSET $3`,
+    [embeddingLiteral, limit, offset]
+  );
   return result.rows.map(rowToModel);
 }
 
@@ -126,26 +168,45 @@ export function createModelRepository(): ModelRepository {
       try {
         await client.sql`BEGIN`;
         for (const model of models) {
-          await client.sql`
-            INSERT INTO models (id, provider, display_name, context_length, input_price_per_1k, output_price_per_1k, metadata, fetched_at)
+        await client.sql`
+            INSERT INTO models (
+              id, provider, display_name, description, modality,
+              context_length, max_completion_tokens,
+              input_price_per_1k, output_price_per_1k, image_price_per_1k,
+              created_at, metadata, fetched_at
+            )
             VALUES (
               ${model.id},
               ${model.provider},
               ${model.displayName},
+              ${model.description},
+              ${model.modality},
               ${model.contextLength},
+              ${model.maxCompletionTokens},
               ${model.inputPricePer1k},
               ${model.outputPricePer1k},
+              ${model.imagePricePer1k},
+              ${model.createdAt?.toISOString() ?? null},
               ${JSON.stringify(model.metadata)},
               ${model.fetchedAt.toISOString()}
             )
             ON CONFLICT (id) DO UPDATE SET
               provider = EXCLUDED.provider,
               display_name = EXCLUDED.display_name,
+              description = EXCLUDED.description,
+              modality = EXCLUDED.modality,
               context_length = EXCLUDED.context_length,
+              max_completion_tokens = EXCLUDED.max_completion_tokens,
               input_price_per_1k = EXCLUDED.input_price_per_1k,
               output_price_per_1k = EXCLUDED.output_price_per_1k,
+              image_price_per_1k = EXCLUDED.image_price_per_1k,
+              created_at = EXCLUDED.created_at,
               metadata = EXCLUDED.metadata,
-              fetched_at = EXCLUDED.fetched_at
+              fetched_at = EXCLUDED.fetched_at,
+              description_embedding = CASE
+                WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                ELSE models.description_embedding
+              END
           `;
         }
         await client.sql`COMMIT`;

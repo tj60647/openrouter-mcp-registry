@@ -44,18 +44,34 @@ export class ModelSyncService {
         const rawOutputPrice = pm.pricing?.completion
           ? parseFloat(pm.pricing.completion) * 1000
           : null;
+        const rawImagePrice = pm.pricing?.image ? parseFloat(pm.pricing.image) * 1000 : null;
 
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { id: _id, name: _name, contextLength: _cl, pricing: _p, ...rest } = pm;
+        const {
+          id: _id,
+          name: _name,
+          contextLength: _cl,
+          pricing: _p,
+          description: _desc,
+          modality: _mod,
+          maxCompletionTokens: _mct,
+          createdTimestamp: _ct,
+          ...rest
+        } = pm;
 
         return {
           id,
           provider,
           displayName: pm.name,
+          description: pm.description ?? null,
+          modality: pm.modality ?? null,
           contextLength: pm.contextLength ?? null,
+          maxCompletionTokens: pm.maxCompletionTokens ?? null,
           inputPricePer1k: rawInputPrice != null && !isNaN(rawInputPrice) ? rawInputPrice : null,
           outputPricePer1k:
             rawOutputPrice != null && !isNaN(rawOutputPrice) ? rawOutputPrice : null,
+          imagePricePer1k: rawImagePrice != null && !isNaN(rawImagePrice) ? rawImagePrice : null,
+          createdAt: pm.createdTimestamp != null ? new Date(pm.createdTimestamp * 1000) : null,
           metadata: rest as Record<string, unknown>,
           fetchedAt: now,
         };
