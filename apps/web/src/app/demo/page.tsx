@@ -163,7 +163,7 @@ function AgentModal({
                 {/* Ensure current selection is always shown even if not in the list */}
                 {[
                   ...new Set([
-                    ...(selectedModel && !config.availableModels.includes(selectedModel as never)
+                    ...(selectedModel !== null && !config.availableModels.includes(selectedModel)
                       ? [selectedModel]
                       : []),
                     ...config.availableModels,
