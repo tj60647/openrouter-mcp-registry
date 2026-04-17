@@ -3,7 +3,7 @@ import MermaidDiagram from '../components/MermaidDiagram';
 
 const architectureChart = `
 flowchart LR
-  subgraph Web["Vercel Deployment: web"]
+  subgraph Web["Vercel Deployment: web (demo UI + MCP-client chatbot)"]
     WebApp["apps/web<br/>Next.js demo UI"]
   end
 
@@ -19,6 +19,7 @@ flowchart LR
 
   Shared --> WebApp
   Shared --> McpApp
+  WebApp -->|MCP Streamable HTTP| McpApp
   WebApp --> Database
   McpApp --> Database
   Clients --> McpApp
@@ -37,6 +38,17 @@ export default function HomePage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', marginBottom: 0 }}>
           A centralized model registry backed by OpenRouter. Prevents stale model names,
           standardizes model IDs, and exposes an MCP-compatible endpoint for AI clients.
+        </p>
+      </div>
+
+      <div className="card" style={{ background: 'var(--bg)', borderLeft: '3px solid var(--accent)', padding: '1rem 1.25rem' }}>
+        <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+          <strong style={{ color: 'var(--text)' }}>About this UI:</strong>{' '}
+          This web app reads the registry database directly — it is <em>not</em> an MCP client and does not
+          route requests through the MCP endpoint. It exists to let you browse the registry as a human.
+          To see the MCP in action, connect an AI client (Claude Desktop, Cursor, etc.) to{' '}
+          <code>{mcpUrl}/api/mcp</code> — see the{' '}
+          <a href="/mcp-info">MCP Integration</a> page for setup instructions.
         </p>
       </div>
 

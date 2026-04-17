@@ -10,6 +10,7 @@ const links = [
   { href: '/resolve', label: 'Resolve' },
   { href: '/sync-status', label: 'Sync Status' },
   { href: '/mcp-info', label: 'MCP Info' },
+  { href: '/demo', label: 'Demo' },
 ];
 
 export default function NavBar() {

@@ -2,6 +2,39 @@ import { sql } from '@vercel/postgres';
 import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 
+export async function getModelById(id: string): Promise<Model | null> {
+  const result = await sql<ModelRow>`SELECT * FROM models WHERE id = ${id} LIMIT 1`;
+  return result.rows[0] ? rowToModel(result.rows[0]) : null;
+}
+
+export async function findModelsByCriteria(opts: {
+  maxInputPricePer1k?: number;
+  maxOutputPricePer1k?: number;
+  minContextLength?: number;
+  limit: number;
+  offset: number;
+}): Promise<Model[]> {
+  const {
+    maxInputPricePer1k = null,
+    maxOutputPricePer1k = null,
+    minContextLength = null,
+    limit,
+    offset,
+  } = opts;
+
+  // When a parameter is null the condition is bypassed (IS NULL short-circuits).
+  // Models with NULL prices are treated as free / unknown (always pass the filter).
+  const result = await sql<ModelRow>`
+    SELECT * FROM models
+    WHERE
+      (${maxInputPricePer1k}::numeric IS NULL OR input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+      AND (${maxOutputPricePer1k}::numeric IS NULL OR output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+      AND (${minContextLength}::integer IS NULL OR context_length IS NULL OR context_length >= ${minContextLength})
+    ORDER BY id LIMIT ${limit} OFFSET ${offset}
+  `;
+  return result.rows.map(rowToModel);
+}
+
 export async function getModels(opts: {
   limit: number;
   offset: number;

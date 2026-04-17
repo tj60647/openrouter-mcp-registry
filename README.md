@@ -2,7 +2,9 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/tj60647/openrouter-mcp-registry)
 
-A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **demo web application**. Designed for zero-config deployment on Vercel.
+A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **browsable reference web application**. Designed for zero-config deployment on Vercel.
+
+> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`) powered by the MCP. The chatbot connects to `apps/mcp` via the MCP Streamable HTTP protocol, discovers tools dynamically at runtime, and routes every tool call through the MCP server — it does not access the database directly. The rest of the UI (model browser, resolve page) reads Postgres directly as a convenience. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
 
 ## Why?
 
@@ -30,8 +32,8 @@ graph TD
         cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
     end
 
-    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI"]
-        webApp["apps/web\nNext.js · Demo UI + REST"]
+    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI (MCP client + direct DB for browser pages)"]
+        webApp["apps/web\nNext.js · Demo UI + MCP client chatbot"]
     end
 
     openrouter["OpenRouter API"]
@@ -39,7 +41,8 @@ graph TD
     shared -.->|shared code| mcpApp
     shared -.->|shared code| webApp
     mcpApp --> db
-    webApp -->|same POSTGRES_URL| db
+    webApp -->|MCP Streamable HTTP /api/mcp| mcpApp
+    webApp -->|same POSTGRES_URL for browser pages| db
     cron -->|weekly sync| openrouter
 ```
 
@@ -50,7 +53,7 @@ openrouter-mcp-registry/
 ├── apps/
 │   ├── mcp/              Next.js app — MCP server + full REST API  ← primary
 │   │   └── vercel.json   Vercel cron config for this project
-│   └── web/              Next.js app — Demo UI + read REST API     ← optional
+│   └── web/              Next.js app — Demo UI + MCP-client chatbot ← optional
 ├── packages/
 │   └── shared/           Shared TypeScript — types, services, providers
 ├── vercel.json           Cron config for apps/web if deployed from repo root
@@ -61,7 +64,7 @@ openrouter-mcp-registry/
 
 ## REST API
 
-Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset for its demo UI.
+Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset used by its browser UI; both apps connect directly to the same Postgres database.
 
 ### `apps/mcp` routes (full API)
 
@@ -83,6 +86,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | `GET` | `/api/models` | List cached models |
 | `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check |
+| `POST` | `/api/chat` | Chatbot — LLM + tool calls routed through MCP |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
 
@@ -145,6 +149,8 @@ cp apps/mcp/.env.example apps/mcp/.env.local
 cp apps/web/.env.example apps/web/.env.local
 # Edit both .env.local files and fill in the required values
 # (Both apps use the same POSTGRES_URL — point them at the same database)
+# For local dev, apps/web/.env.local should have:
+#   MCP_URL=http://localhost:3001   ← points the chatbot at the local MCP server
 
 # 3. Run database migrations
 pnpm db:migrate
@@ -227,9 +233,9 @@ pnpm db:seed
 
 ---
 
-### Project 2 — `apps/web` (optional demo UI)
+### Project 2 — `apps/web` (optional demo UI + MCP-client chatbot)
 
-This is the demo front-end. It reads from the same Neon database as `apps/mcp`.
+This is a human-facing browser for the registry. The **`/demo` chatbot** connects to `apps/mcp` via the MCP Streamable HTTP protocol — it discovers tools dynamically and routes every tool call through the MCP server, making it a live example of MCP usage. The rest of the UI reads from the same Neon database as `apps/mcp` via a direct Postgres connection.
 
 #### 1. Create the Vercel project
 
@@ -246,9 +252,10 @@ You can either:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key |
+| `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key (used by the `/demo` chatbot) |
 | `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project |
-| `NEXT_PUBLIC_MCP_URL` | ✅ | Full URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) |
+| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
+| `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 
 `CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`).
@@ -301,6 +308,56 @@ If `MCP_API_KEY` is set:
     }
   }
 }
+```
+
+### GitHub Copilot (VS Code)
+
+Add to your workspace's `.vscode/mcp.json` (or to your user `settings.json` under the `"mcp"` key):
+
+```json
+{
+  "servers": {
+    "openrouter-registry": {
+      "type": "http",
+      "url": "https://your-mcp-app.vercel.app/api/mcp"
+    }
+  }
+}
+```
+
+If `MCP_API_KEY` is set, add a `headers` field:
+
+```json
+{
+  "servers": {
+    "openrouter-registry": {
+      "type": "http",
+      "url": "https://your-mcp-app.vercel.app/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_API_KEY"
+      }
+    }
+  }
+}
+```
+
+> VS Code discovers `.vscode/mcp.json` automatically. You can also add the same block under `"mcp": { "servers": { ... } }` in your user or workspace `settings.json`.
+
+### OpenAI Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.openrouter-registry]
+url = "https://your-mcp-app.vercel.app/api/mcp"
+```
+
+If `MCP_API_KEY` is set:
+
+```toml
+[mcp_servers.openrouter-registry]
+url = "https://your-mcp-app.vercel.app/api/mcp"
+bearer_token = "YOUR_MCP_API_KEY"
 ```
 
 ### Using in an agent
@@ -431,10 +488,12 @@ Tests cover:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key for model fetching |
+| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key (used by the `/demo` chatbot) |
 | `POSTGRES_URL` | ✅ | Same Neon/Postgres connection string as the `mcp` project |
 | `ADMIN_SECRET` | ✅ | Token for admin endpoints |
-| `NEXT_PUBLIC_MCP_URL` | ✅ | Full URL of your deployed `mcp` app |
+| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app — chatbot connects here via MCP |
+| `MCP_API_KEY` | ❌ | Bearer token sent to the MCP endpoint (must match `apps/mcp` setting) |
+| `CHAT_MODEL` | ❌ | OpenRouter model ID for the chatbot (default: `openai/gpt-4o-mini`) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 | `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
 
