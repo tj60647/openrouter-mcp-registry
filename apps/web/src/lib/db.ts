@@ -2,6 +2,83 @@ import { sql } from '@vercel/postgres';
 import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 
+export async function getModelById(id: string): Promise<Model | null> {
+  const result = await sql<ModelRow>`SELECT * FROM models WHERE id = ${id} LIMIT 1`;
+  return result.rows[0] ? rowToModel(result.rows[0]) : null;
+}
+
+export async function findModelsByCriteria(opts: {
+  maxInputPricePer1k?: number;
+  maxOutputPricePer1k?: number;
+  minContextLength?: number;
+  limit: number;
+  offset: number;
+}): Promise<Model[]> {
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset } = opts;
+
+  // Build query dynamically; models with NULL prices are treated as no-cost / unknown
+  if (maxInputPricePer1k !== undefined && maxOutputPricePer1k !== undefined && minContextLength !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+        AND (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+        AND (context_length IS NULL OR context_length >= ${minContextLength})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (maxInputPricePer1k !== undefined && maxOutputPricePer1k !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+        AND (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (maxInputPricePer1k !== undefined && minContextLength !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+        AND (context_length IS NULL OR context_length >= ${minContextLength})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (maxOutputPricePer1k !== undefined && minContextLength !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+        AND (context_length IS NULL OR context_length >= ${minContextLength})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (maxInputPricePer1k !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (input_price_per_1k IS NULL OR input_price_per_1k <= ${maxInputPricePer1k})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (maxOutputPricePer1k !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (output_price_per_1k IS NULL OR output_price_per_1k <= ${maxOutputPricePer1k})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else if (minContextLength !== undefined) {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models
+      WHERE (context_length IS NULL OR context_length >= ${minContextLength})
+      ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  } else {
+    const result = await sql<ModelRow>`
+      SELECT * FROM models ORDER BY id LIMIT ${limit} OFFSET ${offset}
+    `;
+    return result.rows.map(rowToModel);
+  }
+}
+
 export async function getModels(opts: {
   limit: number;
   offset: number;
