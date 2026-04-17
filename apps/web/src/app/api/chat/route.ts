@@ -94,14 +94,14 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
 
-  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxTokens?: number };
+  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   try {
-    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string; temperature?: number; maxTokens?: number };
+    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
-  const { messages, model: requestedModel, temperature, maxTokens } = parsedBody;
+  const { messages, model: requestedModel, temperature, maxOutputTokens } = parsedBody;
   const chatModel = requestedModel ?? CHAT_MODEL;
 
   const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
@@ -151,7 +151,7 @@ export async function POST(req: Request): Promise<Response> {
       messages: await convertToModelMessages(messages),
       tools,
       temperature,
-      maxTokens,
+      maxOutputTokens,
       stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
       onFinish: async () => {
         await mcpClient.close().catch(() => {});

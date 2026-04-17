@@ -150,18 +150,18 @@ function AgentPanel({
   config,
   selectedModel,
   temperature,
-  maxTokens,
+  maxOutputTokens,
   onModelChange,
   onTemperatureChange,
-  onMaxTokensChange,
+  onMaxOutputTokensChange,
 }: {
   config: AgentConfig | null;
   selectedModel: string | null;
   temperature: number;
-  maxTokens: number | undefined;
+  maxOutputTokens: number | undefined;
   onModelChange: (m: string) => void;
   onTemperatureChange: (t: number) => void;
-  onMaxTokensChange: (t: number | undefined) => void;
+  onMaxOutputTokensChange: (t: number | undefined) => void;
 }) {
   const [systemOpen, setSystemOpen] = useState(false);
 
@@ -261,8 +261,8 @@ function AgentPanel({
           max={MAX_TOKEN_LIMIT}
           step={256}
           placeholder="Model default"
-          value={maxTokens ?? ''}
-          onChange={(e) => onMaxTokensChange(parseMaxTokens(e.target.value))}
+          value={maxOutputTokens ?? ''}
+          onChange={(e) => onMaxOutputTokensChange(parseMaxTokens(e.target.value))}
           style={{
             width: '100%',
             background: 'var(--bg)',
@@ -602,19 +602,19 @@ export default function DemoPage() {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [temperature, setTemperature] = useState(1.0);
-  const [maxTokens, setMaxTokens] = useState<number | undefined>(undefined);
+  const [maxOutputTokens, setMaxOutputTokens] = useState<number | undefined>(undefined);
   const [showPanel, setShowPanel] = useState(true);
 
   const chatBody = useMemo(
     () => ({
       ...(selectedModel ? { model: selectedModel } : {}),
       temperature,
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     }),
-    [selectedModel, temperature, maxTokens]
+    [selectedModel, temperature, maxOutputTokens]
   );
 
-  const { messages, sendMessage, status, error, stop } = useChat({ body: chatBody });
+  const { messages, sendMessage, status, error, stop } = useChat();
 
   const [input, setInput] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -648,7 +648,7 @@ export default function DemoPage() {
     e.preventDefault();
     const text = input.trim();
     if (!text || loading) return;
-    void sendMessage({ text });
+    void sendMessage({ text }, { body: chatBody });
     setInput('');
   }
 
@@ -752,7 +752,7 @@ export default function DemoPage() {
                         key={p}
                         type="button"
                         onClick={() => {
-                          void sendMessage({ text: p });
+                          void sendMessage({ text: p }, { body: chatBody });
                         }}
                         style={{
                           background: 'var(--bg)',
@@ -930,10 +930,10 @@ export default function DemoPage() {
               config={agentConfig}
               selectedModel={selectedModel}
               temperature={temperature}
-              maxTokens={maxTokens}
+              maxOutputTokens={maxOutputTokens}
               onModelChange={setSelectedModel}
               onTemperatureChange={setTemperature}
-              onMaxTokensChange={setMaxTokens}
+              onMaxOutputTokensChange={setMaxOutputTokens}
             />
           </div>
         )}

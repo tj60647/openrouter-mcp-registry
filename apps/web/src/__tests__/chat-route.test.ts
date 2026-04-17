@@ -115,25 +115,25 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
   });
 
-  it('passes temperature and maxTokens to streamText when provided', async () => {
+  it('passes temperature and maxOutputTokens to streamText when provided', async () => {
     const { streamText } = await import('ai');
     const { POST } = await import('../app/api/chat/route');
 
-    await POST(makePostRequest({ messages: [], temperature: 0.3, maxTokens: 512 }));
+    await POST(makePostRequest({ messages: [], temperature: 0.3, maxOutputTokens: 512 }));
 
     expect(vi.mocked(streamText)).toHaveBeenCalledWith(
-      expect.objectContaining({ temperature: 0.3, maxTokens: 512 })
+      expect.objectContaining({ temperature: 0.3, maxOutputTokens: 512 })
     );
   });
 
-  it('passes undefined temperature and maxTokens when not provided', async () => {
+  it('passes undefined temperature and maxOutputTokens when not provided', async () => {
     const { streamText } = await import('ai');
     const { POST } = await import('../app/api/chat/route');
 
     await POST(makePostRequest({ messages: [] }));
 
     expect(vi.mocked(streamText)).toHaveBeenCalledWith(
-      expect.objectContaining({ temperature: undefined, maxTokens: undefined })
+      expect.objectContaining({ temperature: undefined, maxOutputTokens: undefined })
     );
   });
 
