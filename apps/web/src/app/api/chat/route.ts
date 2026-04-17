@@ -59,11 +59,24 @@ async function connectMcpClient(mcpUrl: string): Promise<Client> {
 // ── GET – agent config ────────────────────────────────────────────────────────
 
 export async function GET(): Promise<Response> {
+  // Try to list tools from the MCP server; fall back to empty array on any failure.
+  let mcpTools: Array<{ name: string; description: string }> = [];
+  const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+  if (mcpUrl) {
+    const client = await connectMcpClient(mcpUrl).catch(() => null);
+    if (client) {
+      const listed = await client.listTools().catch(() => ({ tools: [] }));
+      mcpTools = listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
+      await client.close().catch(() => {});
+    }
+  }
+
   return Response.json({
     model: CHAT_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     parameters: AGENT_PARAMETERS,
     availableModels: AVAILABLE_MODELS,
+    tools: mcpTools,
   });
 }
 
@@ -81,14 +94,14 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
 
-  let parsedBody: { messages: UIMessage[]; model?: string };
+  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxTokens?: number };
   try {
-    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string };
+    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string; temperature?: number; maxTokens?: number };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
-  const { messages, model: requestedModel } = parsedBody;
+  const { messages, model: requestedModel, temperature, maxTokens } = parsedBody;
   const chatModel = requestedModel ?? CHAT_MODEL;
 
   const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
@@ -137,6 +150,8 @@ export async function POST(req: Request): Promise<Response> {
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
       tools,
+      temperature,
+      maxTokens,
       stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
       onFinish: async () => {
         await mcpClient.close().catch(() => {});

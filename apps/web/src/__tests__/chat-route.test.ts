@@ -44,7 +44,7 @@ function makePostRequest(body: unknown, contentType = 'application/json') {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('GET /api/chat', () => {
-  it('returns the agent configuration', async () => {
+  it('returns the agent configuration including an empty tools array when MCP is not configured', async () => {
     const { GET } = await import('../app/api/chat/route');
     const res = await GET();
     expect(res.status).toBe(200);
@@ -54,6 +54,8 @@ describe('GET /api/chat', () => {
     expect(body['parameters']).toBeDefined();
     expect(Array.isArray(body['availableModels'])).toBe(true);
     expect((body['availableModels'] as string[]).length).toBeGreaterThan(0);
+    // tools is always an array; empty when MCP not configured in this test env
+    expect(Array.isArray(body['tools'])).toBe(true);
   });
 });
 
@@ -111,6 +113,28 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(200);
+  });
+
+  it('passes temperature and maxTokens to streamText when provided', async () => {
+    const { streamText } = await import('ai');
+    const { POST } = await import('../app/api/chat/route');
+
+    await POST(makePostRequest({ messages: [], temperature: 0.3, maxTokens: 512 }));
+
+    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: 0.3, maxTokens: 512 })
+    );
+  });
+
+  it('passes undefined temperature and maxTokens when not provided', async () => {
+    const { streamText } = await import('ai');
+    const { POST } = await import('../app/api/chat/route');
+
+    await POST(makePostRequest({ messages: [] }));
+
+    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: undefined, maxTokens: undefined })
+    );
   });
 
   it('uses a client-supplied model when provided in the request body', async () => {
