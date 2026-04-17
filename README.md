@@ -2,7 +2,9 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/tj60647/openrouter-mcp-registry)
 
-A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **demo web application**. Designed for zero-config deployment on Vercel.
+A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **browsable reference web application**. Designed for zero-config deployment on Vercel.
+
+> **Note — what `apps/web` is (and isn't):** The web UI is a read-only database browser that connects to Postgres directly. It does **not** route requests through the MCP endpoint and is therefore not itself a demonstration of MCP usage. Its purpose is to let humans inspect the registry visually. For a real demonstration of the MCP, connect an AI client (e.g. Claude Desktop) to `apps/mcp` — see [MCP Client Setup](#mcp-client-setup).
 
 ## Why?
 
@@ -30,7 +32,7 @@ graph TD
         cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
     end
 
-    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI"]
+    subgraph web_deploy["Vercel Project · apps/web  ← optional browser UI (direct DB, not MCP client)"]
         webApp["apps/web\nNext.js · Demo UI + REST"]
     end
 
@@ -50,7 +52,7 @@ openrouter-mcp-registry/
 ├── apps/
 │   ├── mcp/              Next.js app — MCP server + full REST API  ← primary
 │   │   └── vercel.json   Vercel cron config for this project
-│   └── web/              Next.js app — Demo UI + read REST API     ← optional
+│   └── web/              Next.js app — Read-only DB browser (not an MCP client) ← optional
 ├── packages/
 │   └── shared/           Shared TypeScript — types, services, providers
 ├── vercel.json           Cron config for apps/web if deployed from repo root
@@ -61,7 +63,7 @@ openrouter-mcp-registry/
 
 ## REST API
 
-Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset for its demo UI.
+Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset used by its browser UI; both apps connect directly to the same Postgres database.
 
 ### `apps/mcp` routes (full API)
 
@@ -227,9 +229,9 @@ pnpm db:seed
 
 ---
 
-### Project 2 — `apps/web` (optional demo UI)
+### Project 2 — `apps/web` (optional read-only browser UI)
 
-This is the demo front-end. It reads from the same Neon database as `apps/mcp`.
+This is a human-facing browser for the registry. It reads from the same Neon database as `apps/mcp` via a direct Postgres connection — it does **not** proxy requests through the MCP endpoint. If you want to see the MCP in action, connect an AI client (Claude Desktop, Cursor, etc.) to `apps/mcp/api/mcp` instead.
 
 #### 1. Create the Vercel project
 
