@@ -25,7 +25,7 @@ export default function McpInfoPage() {
             {
               name: 'list_models',
               description: 'List all models in the registry',
-              params: '{ limit?: number, offset?: number, provider?: string }',
+              params: '{ limit?: number, offset?: number, provider?: string, query?: string }',
             },
             {
               name: 'resolve_model',
@@ -33,13 +33,28 @@ export default function McpInfoPage() {
               params: '{ input: string }',
             },
             {
-              name: 'get_default_model',
-              description: 'Get the default recommended model',
-              params: '{}',
+              name: 'get_model',
+              description: 'Get full details for a single model by canonical ID',
+              params: '{ id: string }',
             },
             {
-              name: 'get_sync_status',
-              description: 'Get the current sync status',
+              name: 'search_models',
+              description: 'Search models by name, ID, or provider substring',
+              params: '{ query: string, limit?: number, offset?: number }',
+            },
+            {
+              name: 'find_models_by_criteria',
+              description: 'Filter models by budget and context constraints',
+              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number }',
+            },
+            {
+              name: 'compare_models',
+              description: 'Compare 2–5 models side-by-side on pricing and context length',
+              params: '{ ids: string[] }',
+            },
+            {
+              name: 'get_registry_status',
+              description: 'Get the current sync status of the model registry',
               params: '{}',
             },
           ].map((tool) => (
@@ -47,6 +62,61 @@ export default function McpInfoPage() {
               <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{tool.name}</code>
               <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{tool.description}</p>
               <pre><code>{tool.params}</code></pre>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Available Resources</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+          Read registry data directly via MCP resource URIs (read-only, accessible via <code>resources/read</code>).
+        </p>
+        <div className="stack">
+          {[
+            {
+              uri: 'registry://models',
+              description: 'Full list of models in the registry (up to 500)',
+            },
+            {
+              uri: 'registry://status',
+              description: 'Current sync status (last sync time, record count, errors)',
+            },
+            {
+              uri: 'registry://models/{id}',
+              description: 'Details for a specific model — URL-encode the canonical ID (e.g. registry://models/anthropic%2Fclaude-sonnet-4-5)',
+            },
+          ].map((resource) => (
+            <div key={resource.uri} className="card" style={{ background: 'var(--bg)' }}>
+              <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{resource.uri}</code>
+              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{resource.description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Available Prompts</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+          Reusable prompt templates that guide model-selection and comparison workflows (accessible via <code>prompts/get</code>).
+        </p>
+        <div className="stack">
+          {[
+            {
+              name: 'select_model',
+              description: 'Generate a structured prompt to select the best model for a task',
+              params: '{ task_description: string, budget_usd_per_1k_tokens?: string, min_context_length?: string }',
+            },
+            {
+              name: 'compare_models_prompt',
+              description: 'Generate a structured prompt to compare a set of models side-by-side',
+              params: '{ model_ids: string }',
+            },
+          ].map((prompt) => (
+            <div key={prompt.name} className="card" style={{ background: 'var(--bg)' }}>
+              <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{prompt.name}</code>
+              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{prompt.description}</p>
+              <pre><code>{prompt.params}</code></pre>
             </div>
           ))}
         </div>
@@ -84,10 +154,21 @@ const result = await mcp.callTool('resolve_model', { input: 'sonnet' });
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
-              Get the default model:
+              Read the model list as a resource:
             </p>
-            <pre><code>{`const result = await mcp.callTool('get_default_model', {});
-// → { resolved: 'anthropic/claude-sonnet-4-5', ... }`}</code></pre>
+            <pre><code>{`const result = await mcp.readResource('registry://models');
+// → { contents: [{ mimeType: 'application/json', text: '{"models":[...]}' }] }`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Use the select_model prompt to guide model selection:
+            </p>
+            <pre><code>{`const prompt = await mcp.getPrompt('select_model', {
+  task_description: 'Summarize long legal documents',
+  budget_usd_per_1k_tokens: '0.005',
+  min_context_length: '32000',
+});
+// → prompt messages that instruct the model how to pick the best option`}</code></pre>
           </div>
         </div>
       </div>
