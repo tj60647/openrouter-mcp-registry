@@ -3,38 +3,52 @@ import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 import type { ModelRepository } from '@openrouter-mcp/shared';
 
+// Whitelist of allowed sort columns mapped to their SQL column names.
+// Used by getModels and findModelsByCriteria to prevent SQL injection.
+const SORT_COLUMN_MAP: Record<string, string> = {
+  id: 'id',
+  display_name: 'display_name',
+  provider: 'provider',
+  context_length: 'context_length',
+  input_price_per_1k: 'input_price_per_1k',
+  output_price_per_1k: 'output_price_per_1k',
+};
+
+export type SortBy = keyof typeof SORT_COLUMN_MAP;
+
+function resolveOrderBy(sortBy?: string): string {
+  return SORT_COLUMN_MAP[sortBy ?? ''] ?? 'id';
+}
+
 export async function getModels(opts: {
   limit: number;
   offset: number;
   provider?: string;
   query?: string;
+  sortBy?: string;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query } = opts;
+  const { limit, offset, provider, query, sortBy } = opts;
   const likeQuery = query ? `%${query}%` : null;
-  let result;
-  if (provider && likeQuery) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE provider = ${provider}
-        AND (id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery})
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (provider) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models WHERE provider = ${provider}
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (likeQuery) {
-    result = await sql<ModelRow>`
-      SELECT * FROM models
-      WHERE id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery}
-      ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else {
-    result = await sql<ModelRow>`
-      SELECT * FROM models ORDER BY id LIMIT ${limit} OFFSET ${offset}
-    `;
+  const orderCol = resolveOrderBy(sortBy);
+
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (provider) {
+    params.push(provider);
+    conditions.push(`provider = $${params.length}`);
   }
+  if (likeQuery) {
+    params.push(likeQuery, likeQuery, likeQuery);
+    const n = params.length;
+    conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit, offset);
+  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
+
+  const result = await db.query<ModelRow>(queryStr, params);
   return result.rows.map(rowToModel);
 }
 
@@ -71,9 +85,10 @@ export async function getModelsCount(opts: {
 }
 
 export async function getModelById(id: string): Promise<Model | null> {
-  const result = await sql<ModelRow>`
-    SELECT * FROM models WHERE id = ${id} LIMIT 1
-  `;
+  const result = await db.query<ModelRow>(
+    'SELECT * FROM models WHERE LOWER(id) = LOWER($1) LIMIT 1',
+    [id]
+  );
   return result.rows[0] ? rowToModel(result.rows[0]) : null;
 }
 
@@ -90,8 +105,10 @@ export async function findModelsByCriteria(opts: {
   minContextLength?: number;
   limit: number;
   offset: number;
+  sortBy?: string;
 }): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset } = opts;
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset, sortBy } = opts;
+  const orderCol = resolveOrderBy(sortBy);
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -111,7 +128,7 @@ export async function findModelsByCriteria(opts: {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
-  const query = `SELECT * FROM models ${where} ORDER BY id LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
   const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
   return result.rows.map(rowToModel);

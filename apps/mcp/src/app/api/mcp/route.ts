@@ -28,14 +28,19 @@ function createMcpServer(): McpServer {
     'list_models',
     'List available models in the registry with optional filtering. Use the query param to search by name, ID, or provider.',
     {
-      limit: z.number().int().min(1).max(500).optional().default(100),
+      limit: z.number().int().min(1).max(500).optional().default(500),
       offset: z.number().int().min(0).optional().default(0),
       provider: z.string().optional(),
       query: z.string().optional().describe('Text search across model ID, display name, and provider'),
+      sortBy: z
+        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .optional()
+        .default('id')
+        .describe('Column to sort results by'),
     },
-    async ({ limit, offset, provider, query }) => {
+    async ({ limit, offset, provider, query, sortBy }) => {
       try {
-        const models = await getModels({ limit, offset, provider, query });
+        const models = await getModels({ limit, offset, provider, query, sortBy });
         return {
           content: [
             {
@@ -116,15 +121,20 @@ function createMcpServer(): McpServer {
   // Tool: search_models
   server.tool(
     'search_models',
-    'Search for models by name, ID, or provider substring. Returns matching models sorted by ID.',
+    'Search for models by name, ID, or provider substring. Returns matching models sorted by the chosen column.',
     {
       query: z.string().min(1).max(256).describe('Search term to match against model ID, display name, or provider'),
       limit: z.number().int().min(1).max(100).optional().default(20),
       offset: z.number().int().min(0).optional().default(0),
+      sortBy: z
+        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .optional()
+        .default('id')
+        .describe('Column to sort results by'),
     },
-    async ({ query, limit, offset }) => {
+    async ({ query, limit, offset, sortBy }) => {
       try {
-        const models = await getModels({ limit, offset, query });
+        const models = await getModels({ limit, offset, query, sortBy });
         return {
           content: [
             {
@@ -163,8 +173,13 @@ function createMcpServer(): McpServer {
         .describe('Minimum context window size in tokens'),
       limit: z.number().int().min(1).max(200).optional().default(50),
       offset: z.number().int().min(0).optional().default(0),
+      sortBy: z
+        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .optional()
+        .default('id')
+        .describe('Column to sort results by'),
     },
-    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset }) => {
+    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset, sortBy }) => {
       try {
         const models = await findModelsByCriteria({
           maxInputPricePer1k,
@@ -172,6 +187,7 @@ function createMcpServer(): McpServer {
           minContextLength,
           limit,
           offset,
+          sortBy,
         });
         return {
           content: [
