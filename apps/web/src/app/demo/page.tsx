@@ -33,9 +33,9 @@ interface AgentConfig {
 
 const EXAMPLE_PROMPTS = [
   { label: 'Does openai/gpt-4o-mini exist?', text: 'Does the model openai/gpt-4o-mini exist in the registry?' },
-  { label: 'Latest Claude Sonnet?', text: 'What is the most recent version of Claude Sonnet available?' },
+  { label: 'Latest Claude Sonnet?', text: 'What is the most recent version of Claude Sonnet available in the registry?' },
   { label: 'Latest GPT-4 model?', text: 'What is the most recent GPT-4 model available in the registry?' },
-  { label: 'Latest Gemini model?', text: 'What is the most recent Gemini model available?' },
+  { label: 'Latest Gemini model?', text: 'What is the most recent Gemini model available in the registry?' },
   { label: 'Cheapest models', text: 'What are the cheapest models available?' },
   { label: '128k context models', text: 'Find models with at least 128k context window' },
   { label: 'Compare Claude vs GPT-4o', text: 'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o' },
@@ -658,7 +658,7 @@ export default function DemoPage() {
   const activeModel = selectedModel ?? agentConfig?.model;
 
   /** Short display label for the active model, e.g. "gpt-4o-mini" */
-  const modelLabel = activeModel ? activeModel.split('/').pop() ?? activeModel : 'Assistant';
+  const modelLabel = activeModel ? activeModel.split('/').pop() || activeModel : 'Assistant';
 
   return (
     <div className="stack" style={{ height: 'calc(100vh - 8rem)', maxHeight: 900 }}>
