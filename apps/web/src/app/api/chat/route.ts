@@ -1,10 +1,6 @@
 import { z } from 'zod';
-import {
-  getModels,
-  getModelById,
-  findModelsByCriteria,
-  getSyncStatus,
-} from '../../../lib/db';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | ToolCallContent[] | null;
+  content: string | null;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
 }
@@ -24,181 +20,40 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-interface ToolCallContent {
-  type: 'text';
-  text: string;
+// ── MCP helpers ───────────────────────────────────────────────────────────────
+
+type McpTool = {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+};
+
+/** Convert MCP tool schemas to OpenAI function-calling format. */
+function mcpToolsToOpenAI(tools: McpTool[]) {
+  return tools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description ?? '',
+      parameters: t.inputSchema,
+    },
+  }));
 }
 
-// ── Tool definitions ──────────────────────────────────────────────────────────
+/** Create and connect an MCP client to the registry server. */
+async function connectMcpClient(mcpUrl: string): Promise<Client> {
+  const mcpApiKey = process.env['MCP_API_KEY'];
+  const requestInit: RequestInit = mcpApiKey
+    ? { headers: { Authorization: `Bearer ${mcpApiKey}` } }
+    : {};
 
-const TOOL_DEFINITIONS = [
-  {
-    type: 'function',
-    function: {
-      name: 'list_models',
-      description: 'List available models in the registry with optional filtering.',
-      parameters: {
-        type: 'object',
-        properties: {
-          limit: { type: 'number', description: 'Max results (1–100, default 20)' },
-          offset: { type: 'number', description: 'Pagination offset (default 0)' },
-          provider: { type: 'string', description: 'Filter by provider name (e.g. "anthropic")' },
-          query: { type: 'string', description: 'Text search across model ID, name, and provider' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_models',
-      description: 'Search for models by name, ID, or provider substring.',
-      parameters: {
-        type: 'object',
-        required: ['query'],
-        properties: {
-          query: { type: 'string', description: 'Search term' },
-          limit: { type: 'number', description: 'Max results (1–50, default 10)' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_model',
-      description: 'Get full details for a single model by its canonical ID.',
-      parameters: {
-        type: 'object',
-        required: ['id'],
-        properties: {
-          id: { type: 'string', description: 'Canonical model ID, e.g. "anthropic/claude-sonnet-4-5"' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'find_models_by_criteria',
-      description:
-        'Filter models by budget and context window requirements. All parameters are optional.',
-      parameters: {
-        type: 'object',
-        properties: {
-          maxInputPricePer1k: { type: 'number', description: 'Max input price per 1k tokens (USD)' },
-          maxOutputPricePer1k: { type: 'number', description: 'Max output price per 1k tokens (USD)' },
-          minContextLength: { type: 'number', description: 'Min context window in tokens' },
-          limit: { type: 'number', description: 'Max results (1–50, default 10)' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'compare_models',
-      description: 'Compare 2–5 models side-by-side on pricing, context length, and metadata.',
-      parameters: {
-        type: 'object',
-        required: ['ids'],
-        properties: {
-          ids: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Array of 2–5 canonical model IDs',
-            minItems: 2,
-            maxItems: 5,
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_registry_status',
-      description: 'Get the current sync status of the model registry.',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-];
-
-// ── Tool executor ─────────────────────────────────────────────────────────────
-
-async function executeTool(name: string, argsRaw: string): Promise<string> {
-  let args: Record<string, unknown> = {};
-  try {
-    args = JSON.parse(argsRaw) as Record<string, unknown>;
-  } catch {
-    return JSON.stringify({ error: 'Failed to parse tool arguments' });
-  }
-
-  try {
-    switch (name) {
-      case 'list_models': {
-        const { limit = 20, offset = 0, provider, query } = args as {
-          limit?: number; offset?: number; provider?: string; query?: string;
-        };
-        const models = await getModels({ limit: Math.min(Number(limit), 100), offset: Number(offset), provider, query });
-        return JSON.stringify({ models, count: models.length });
-      }
-      case 'search_models': {
-        const { query, limit = 10 } = args as { query?: string; limit?: number };
-        if (!query) return JSON.stringify({ error: 'query is required' });
-        const models = await getModels({ limit: Math.min(Number(limit), 50), offset: 0, query: String(query) });
-        return JSON.stringify({ models, count: models.length });
-      }
-      case 'get_model': {
-        const { id } = args as { id?: string };
-        if (!id) return JSON.stringify({ error: 'id is required' });
-        const model = await getModelById(String(id));
-        return JSON.stringify({ found: model !== null, model });
-      }
-      case 'find_models_by_criteria': {
-        const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit = 10 } = args as {
-          maxInputPricePer1k?: number; maxOutputPricePer1k?: number;
-          minContextLength?: number; limit?: number;
-        };
-        const models = await findModelsByCriteria({
-          maxInputPricePer1k: maxInputPricePer1k !== undefined ? Number(maxInputPricePer1k) : undefined,
-          maxOutputPricePer1k: maxOutputPricePer1k !== undefined ? Number(maxOutputPricePer1k) : undefined,
-          minContextLength: minContextLength !== undefined ? Number(minContextLength) : undefined,
-          limit: Math.min(Number(limit), 50),
-          offset: 0,
-        });
-        return JSON.stringify({ models, count: models.length });
-      }
-      case 'compare_models': {
-        const { ids } = args as { ids?: string[] };
-        if (!Array.isArray(ids)) return JSON.stringify({ error: 'ids must be an array' });
-        const results = await Promise.all(
-          ids.slice(0, 5).map(async (id) => {
-            const model = await getModelById(id);
-            return {
-              id,
-              found: model !== null,
-              displayName: model?.displayName ?? null,
-              provider: model?.provider ?? null,
-              contextLength: model?.contextLength ?? null,
-              inputPricePer1k: model?.inputPricePer1k ?? null,
-              outputPricePer1k: model?.outputPricePer1k ?? null,
-            };
-          })
-        );
-        return JSON.stringify({ comparison: results });
-      }
-      case 'get_registry_status': {
-        const status = await getSyncStatus();
-        return JSON.stringify({ status });
-      }
-      default:
-        return JSON.stringify({ error: `Unknown tool: ${name}` });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return JSON.stringify({ error: message });
-  }
+  const client = new Client({ name: 'web-demo', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${mcpUrl}/api/mcp`),
+    { requestInit }
+  );
+  await client.connect(transport);
+  return client;
 }
 
 // ── Request schema ────────────────────────────────────────────────────────────
@@ -229,6 +84,12 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'OPENROUTER_API_KEY is not configured' }, { status: 503 });
   }
 
+  // MCP_URL (server-side) takes precedence; fall back to the public URL env var
+  const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+  if (!mcpUrl) {
+    return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
+  }
+
   let userMessages: ChatMessage[];
   try {
     const body = await req.json() as unknown;
@@ -239,82 +100,113 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...userMessages,
-  ];
-
-  // Agentic loop: call OpenRouter, execute tool calls, repeat (up to 10 steps)
-  for (let step = 0; step < 10; step++) {
-    const orResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
-      },
-      body: JSON.stringify({
-        model: CHAT_MODEL,
-        messages,
-        tools: TOOL_DEFINITIONS,
-        tool_choice: 'auto',
-        stream: false,
-      }),
-    });
-
-    if (!orResponse.ok) {
-      const errText = await orResponse.text();
-      return Response.json({ error: `OpenRouter error: ${errText}` }, { status: 502 });
-    }
-
-    const orData = await orResponse.json() as {
-      choices?: Array<{
-        message?: {
-          role: string;
-          content: string | null;
-          tool_calls?: ToolCall[];
-        };
-        finish_reason?: string;
-      }>;
-    };
-
-    const choice = orData.choices?.[0];
-    const assistantMsg = choice?.message;
-    if (!assistantMsg) {
-      return Response.json({ error: 'No response from model' }, { status: 502 });
-    }
-
-    messages.push({
-      role: 'assistant',
-      content: assistantMsg.content ?? null,
-      tool_calls: assistantMsg.tool_calls,
-    });
-
-    // If no tool calls or finish_reason is stop, return the final text
-    const toolCalls = assistantMsg.tool_calls;
-    if (!toolCalls || toolCalls.length === 0 || choice?.finish_reason === 'stop') {
-      const text = assistantMsg.content ?? '';
-      return new Response(text, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
-    }
-
-    // Execute all tool calls in parallel
-    const toolResults = await Promise.all(
-      toolCalls.map(async (tc) => ({
-        role: 'tool' as const,
-        tool_call_id: tc.id,
-        content: await executeTool(tc.function.name, tc.function.arguments),
-        // Surface a human-readable label for the frontend
-        _toolName: tc.function.name,
-      }))
-    );
-
-    // Append tool results to the message history
-    for (const tr of toolResults) {
-      messages.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
-    }
+  // Connect to the MCP server for this request
+  let mcpClient: Client;
+  try {
+    mcpClient = await connectMcpClient(mcpUrl);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return Response.json({ error: `Failed to connect to MCP server: ${message}` }, { status: 502 });
   }
 
-  return Response.json({ error: 'Max tool call steps exceeded' }, { status: 500 });
+  try {
+    // Discover tools dynamically from the MCP server
+    const { tools: mcpTools } = await mcpClient.listTools();
+    const toolDefinitions = mcpToolsToOpenAI(mcpTools as McpTool[]);
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...userMessages,
+    ];
+
+    // Agentic loop: call OpenRouter, execute tool calls via MCP, repeat (up to 10 steps)
+    for (let step = 0; step < 10; step++) {
+      const orResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
+        },
+        body: JSON.stringify({
+          model: CHAT_MODEL,
+          messages,
+          tools: toolDefinitions,
+          tool_choice: 'auto',
+          stream: false,
+        }),
+      });
+
+      if (!orResponse.ok) {
+        const errText = await orResponse.text();
+        return Response.json({ error: `OpenRouter error: ${errText}` }, { status: 502 });
+      }
+
+      const orData = await orResponse.json() as {
+        choices?: Array<{
+          message?: {
+            role: string;
+            content: string | null;
+            tool_calls?: ToolCall[];
+          };
+          finish_reason?: string;
+        }>;
+      };
+
+      const choice = orData.choices?.[0];
+      const assistantMsg = choice?.message;
+      if (!assistantMsg) {
+        return Response.json({ error: 'No response from model' }, { status: 502 });
+      }
+
+      messages.push({
+        role: 'assistant',
+        content: assistantMsg.content ?? null,
+        tool_calls: assistantMsg.tool_calls,
+      });
+
+      // If no tool calls or finish_reason is stop, return the final text
+      const toolCalls = assistantMsg.tool_calls;
+      if (!toolCalls || toolCalls.length === 0 || choice?.finish_reason === 'stop') {
+        return new Response(assistantMsg.content ?? '', {
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+      }
+
+      // Execute all tool calls in parallel via the MCP server
+      const toolResults = await Promise.all(
+        toolCalls.map(async (tc) => {
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+          } catch {
+            // use empty args if JSON parsing fails
+          }
+          try {
+            const result = await mcpClient.callTool({ name: tc.function.name, arguments: args });
+            const text = (result.content as Array<{ type: string; text?: string }>)
+              .filter((c) => c.type === 'text' && typeof c.text === 'string')
+              .map((c) => c.text as string)
+              .join('\n');
+            return {
+              tool_call_id: tc.id,
+              content: text || JSON.stringify(result.content),
+            };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { tool_call_id: tc.id, content: JSON.stringify({ error: message }) };
+          }
+        })
+      );
+
+      // Append tool results to the message history
+      for (const tr of toolResults) {
+        messages.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
+      }
+    }
+
+    return Response.json({ error: 'Max tool call steps exceeded' }, { status: 500 });
+  } finally {
+    await mcpClient.close().catch(() => {});
+  }
 }
