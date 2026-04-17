@@ -144,8 +144,9 @@ export async function POST(req: Request): Promise<Response> {
       try {
         mcpClient = await connectMcpClient(mcpUrl);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        send({ type: 'error', message: `Failed to connect to MCP server: ${message}` });
+        // Log the full error server-side; send a generic message to the client
+        console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
+        send({ type: 'error', message: 'Failed to connect to the MCP registry server.' });
         controller.close();
         return;
       }

@@ -397,6 +397,35 @@ export default function DemoPage() {
         let buf = '';
         let finalText = '';
 
+        // Pending deltas are flushed together once per chunk to minimise renders
+        let pendingTextDelta = '';
+        let pendingReasoningDelta = '';
+
+        function flushDeltas() {
+          if (pendingTextDelta) {
+            const captured = pendingTextDelta;
+            pendingTextDelta = '';
+            updateAssistantBlocks(assistantId, (blocks) => {
+              const last = blocks[blocks.length - 1];
+              if (last?.kind === 'text') {
+                return [...blocks.slice(0, -1), { ...last, content: last.content + captured }];
+              }
+              return [...blocks, { kind: 'text', content: captured }];
+            });
+          }
+          if (pendingReasoningDelta) {
+            const captured = pendingReasoningDelta;
+            pendingReasoningDelta = '';
+            updateAssistantBlocks(assistantId, (blocks) => {
+              const last = blocks[blocks.length - 1];
+              if (last?.kind === 'reasoning') {
+                return [...blocks.slice(0, -1), { ...last, content: last.content + captured }];
+              }
+              return [...blocks, { kind: 'reasoning', content: captured }];
+            });
+          }
+        }
+
         outer: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -416,51 +445,45 @@ export default function DemoPage() {
               continue;
             }
 
-            if (evt.type === 'model') {
-              setModel(evt.model);
-            } else if (evt.type === 'reasoning_delta') {
-              updateAssistantBlocks(assistantId, (blocks) => {
-                const last = blocks[blocks.length - 1];
-                if (last?.kind === 'reasoning') {
-                  return [
-                    ...blocks.slice(0, -1),
-                    { ...last, content: last.content + evt.delta },
-                  ];
-                }
-                return [...blocks, { kind: 'reasoning', content: evt.delta }];
-              });
-            } else if (evt.type === 'tool_call') {
-              updateAssistantBlocks(assistantId, (blocks) => [
-                ...blocks,
-                { kind: 'tool_call', id: evt.id, name: evt.name, done: false },
-              ]);
-            } else if (evt.type === 'tool_result') {
-              updateAssistantBlocks(assistantId, (blocks) =>
-                blocks.map((b) =>
-                  b.kind === 'tool_call' && b.id === evt.id
-                    ? { ...b, done: true, error: evt.error }
-                    : b
-                )
-              );
-            } else if (evt.type === 'text_delta') {
-              finalText += evt.delta;
-              updateAssistantBlocks(assistantId, (blocks) => {
-                const last = blocks[blocks.length - 1];
-                if (last?.kind === 'text') {
-                  return [
-                    ...blocks.slice(0, -1),
-                    { ...last, content: last.content + evt.delta },
-                  ];
-                }
-                return [...blocks, { kind: 'text', content: evt.delta }];
-              });
-            } else if (evt.type === 'error') {
-              setError(evt.message);
-              break outer;
-            } else if (evt.type === 'done') {
-              break outer;
+            switch (evt.type) {
+              case 'model':
+                setModel(evt.model);
+                break;
+              case 'reasoning_delta':
+                pendingReasoningDelta += evt.delta;
+                break;
+              case 'tool_call':
+                flushDeltas();
+                updateAssistantBlocks(assistantId, (blocks) => [
+                  ...blocks,
+                  { kind: 'tool_call', id: evt.id, name: evt.name, done: false },
+                ]);
+                break;
+              case 'tool_result':
+                flushDeltas();
+                updateAssistantBlocks(assistantId, (blocks) =>
+                  blocks.map((b) =>
+                    b.kind === 'tool_call' && b.id === evt.id
+                      ? { ...b, done: true, error: evt.error }
+                      : b
+                  )
+                );
+                break;
+              case 'text_delta':
+                finalText += evt.delta;
+                pendingTextDelta += evt.delta;
+                break;
+              case 'error':
+                flushDeltas();
+                setError(evt.message);
+                break outer;
+              case 'done':
+                flushDeltas();
+                break outer;
             }
           }
+          // Flush any accumulated deltas after processing each network chunk
+          flushDeltas();
         }
 
         setHistory([...newHistory, { role: 'assistant', content: finalText }]);
