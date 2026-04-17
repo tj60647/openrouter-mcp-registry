@@ -1,44 +1,40 @@
-import { z } from 'zod';
+import { createOpenAI } from '@ai-sdk/openai';
+import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai';
+import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────────────────────
 
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_call_id?: string;
-  tool_calls?: ToolCall[];
-}
+const SYSTEM_PROMPT =
+  `You are a helpful assistant for the OpenRouter MCP Registry. ` +
+  `You help users explore, search, and compare AI models available through OpenRouter. ` +
+  `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
 
-interface ToolCall {
-  id: string;
-  type: 'function';
-  function: { name: string; arguments: string };
-}
+const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
+
+const AGENT_PARAMETERS = {
+  tool_choice: 'auto',
+  max_steps: 10,
+  stream: true,
+} as const;
+
+const AVAILABLE_MODELS = [
+  'openai/gpt-4o-mini',
+  'openai/gpt-4o',
+  'openai/o4-mini',
+  'anthropic/claude-sonnet-4-5',
+  'anthropic/claude-3-5-haiku',
+  'google/gemini-2.0-flash-001',
+  'google/gemini-2.5-pro-preview-03-25',
+  'meta-llama/llama-3.3-70b-instruct',
+  'deepseek/deepseek-chat-v3-0324',
+] as const;
 
 // ── MCP helpers ───────────────────────────────────────────────────────────────
-
-type McpTool = {
-  name: string;
-  description?: string;
-  inputSchema: Record<string, unknown>;
-};
-
-/** Convert MCP tool schemas to OpenAI function-calling format. */
-function mcpToolsToOpenAI(tools: McpTool[]) {
-  return tools.map((t) => ({
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description ?? '',
-      parameters: t.inputSchema,
-    },
-  }));
-}
 
 /** Create and connect an MCP client to the registry server. */
 async function connectMcpClient(mcpUrl: string): Promise<Client> {
@@ -60,27 +56,31 @@ async function connectMcpClient(mcpUrl: string): Promise<Client> {
   return client;
 }
 
-// ── Request schema ────────────────────────────────────────────────────────────
+// ── GET – agent config ────────────────────────────────────────────────────────
 
-const MessageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'system', 'tool']),
-  content: z.string().nullable(),
-  tool_call_id: z.string().optional(),
-  tool_calls: z.array(z.any()).optional(),
-});
+export async function GET(): Promise<Response> {
+  // Try to list tools from the MCP server; fall back to empty array on any failure.
+  let mcpTools: Array<{ name: string; description: string }> = [];
+  const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+  if (mcpUrl) {
+    const client = await connectMcpClient(mcpUrl).catch(() => null);
+    if (client) {
+      const listed = await client.listTools().catch(() => ({ tools: [] }));
+      mcpTools = listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
+      await client.close().catch(() => {});
+    }
+  }
 
-const RequestSchema = z.object({
-  messages: z.array(MessageSchema).min(1),
-});
+  return Response.json({
+    model: CHAT_MODEL,
+    systemPrompt: SYSTEM_PROMPT,
+    parameters: AGENT_PARAMETERS,
+    availableModels: AVAILABLE_MODELS,
+    tools: mcpTools,
+  });
+}
 
-// ── Route handler ─────────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT =
-  `You are a helpful assistant for the OpenRouter MCP Registry. ` +
-  `You help users explore, search, and compare AI models available through OpenRouter. ` +
-  `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
-
-const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
+// ── POST – streaming chat ─────────────────────────────────────────────────────
 
 export async function POST(req: Request): Promise<Response> {
   const apiKey = process.env['OPENROUTER_API_KEY'];
@@ -94,123 +94,73 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
 
-  let userMessages: ChatMessage[];
+  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   try {
-    const body = await req.json() as unknown;
-    const parsed = RequestSchema.safeParse(body);
-    if (!parsed.success) throw new Error('Invalid request body');
-    userMessages = parsed.data.messages as ChatMessage[];
+    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   } catch {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 });
+    return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
-  // Connect to the MCP server for this request
-  let mcpClient: Client;
-  try {
-    mcpClient = await connectMcpClient(mcpUrl);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return Response.json({ error: `Failed to connect to MCP server: ${message}` }, { status: 502 });
+  const { messages, model: requestedModel, temperature, maxOutputTokens } = parsedBody;
+  const chatModel = requestedModel ?? CHAT_MODEL;
+
+  const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
+    console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
+    return null;
+  });
+  if (!mcpClient) {
+    return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
   }
 
   try {
-    // Discover tools dynamically from the MCP server
+    // Discover tools dynamically from the MCP server and bridge them to AI SDK format
     const { tools: mcpTools } = await mcpClient.listTools();
-    const toolDefinitions = mcpToolsToOpenAI(mcpTools as McpTool[]);
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...userMessages,
-    ];
-
-    // Agentic loop: call OpenRouter, execute tool calls via MCP, repeat (up to 10 steps)
-    for (let step = 0; step < 10; step++) {
-      const orResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
-        },
-        body: JSON.stringify({
-          model: CHAT_MODEL,
-          messages,
-          tools: toolDefinitions,
-          tool_choice: 'auto',
-          stream: false,
-        }),
-      });
-
-      if (!orResponse.ok) {
-        const errText = await orResponse.text();
-        return Response.json({ error: `OpenRouter error: ${errText}` }, { status: 502 });
-      }
-
-      const orData = await orResponse.json() as {
-        choices?: Array<{
-          message?: {
-            role: string;
-            content: string | null;
-            tool_calls?: ToolCall[];
-          };
-          finish_reason?: string;
-        }>;
-      };
-
-      const choice = orData.choices?.[0];
-      const assistantMsg = choice?.message;
-      if (!assistantMsg) {
-        return Response.json({ error: 'No response from model' }, { status: 502 });
-      }
-
-      messages.push({
-        role: 'assistant',
-        content: assistantMsg.content ?? null,
-        tool_calls: assistantMsg.tool_calls,
-      });
-
-      // If no tool calls or finish_reason is stop, return the final text
-      const toolCalls = assistantMsg.tool_calls;
-      if (!toolCalls || toolCalls.length === 0 || choice?.finish_reason === 'stop') {
-        return new Response(assistantMsg.content ?? '', {
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        });
-      }
-
-      // Execute all tool calls in parallel via the MCP server
-      const toolResults = await Promise.all(
-        toolCalls.map(async (tc) => {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-          } catch {
-            // use empty args if JSON parsing fails
-          }
-          try {
-            const result = await mcpClient.callTool({ name: tc.function.name, arguments: args });
+    const tools: ToolSet = Object.fromEntries(
+      mcpTools.map((t) => [
+        t.name,
+        {
+          description: t.description ?? '',
+          inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
+          execute: async (args: unknown): Promise<string> => {
+            const result = await mcpClient.callTool({
+              name: t.name,
+              arguments: args as Record<string, unknown>,
+            });
             const text = (result.content as Array<{ type: string; text?: string }>)
               .filter((c) => c.type === 'text' && typeof c.text === 'string')
               .map((c) => c.text as string)
               .join('\n');
-            return {
-              tool_call_id: tc.id,
-              content: text || JSON.stringify(result.content),
-            };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            return { tool_call_id: tc.id, content: JSON.stringify({ error: message }) };
-          }
-        })
-      );
+            return text || JSON.stringify(result.content);
+          },
+        },
+      ])
+    );
 
-      // Append tool results to the message history
-      for (const tr of toolResults) {
-        messages.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
-      }
-    }
+    const openrouter = createOpenAI({
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey,
+      headers: {
+        'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
+      },
+    });
 
-    return Response.json({ error: 'Max tool call steps exceeded' }, { status: 500 });
-  } finally {
+    const result = streamText({
+      model: openrouter.chat(chatModel),
+      system: SYSTEM_PROMPT,
+      messages: await convertToModelMessages(messages),
+      tools,
+      temperature,
+      maxOutputTokens,
+      stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
+      onFinish: async () => {
+        await mcpClient.close().catch(() => {});
+      },
+    });
+
+    return result.toUIMessageStreamResponse();
+  } catch (err) {
     await mcpClient.close().catch(() => {});
+    throw err;
   }
 }
