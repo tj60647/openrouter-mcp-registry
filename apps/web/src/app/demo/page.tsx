@@ -5,6 +5,15 @@ import { useChat } from '@ai-sdk/react';
 import type { DynamicToolUIPart, TextUIPart } from 'ai';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const MAX_TOKEN_LIMIT = 128_000;
+
+function parseMaxTokens(raw: string): number | undefined {
+  const v = parseInt(raw, 10);
+  return isNaN(v) || v <= 0 ? undefined : v;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface AgentTool {
@@ -249,14 +258,11 @@ function AgentPanel({
         <input
           type="number"
           min={1}
-          max={128000}
+          max={MAX_TOKEN_LIMIT}
           step={256}
           placeholder="Model default"
           value={maxTokens ?? ''}
-          onChange={(e) => {
-            const v = parseInt(e.target.value, 10);
-            onMaxTokensChange(isNaN(v) || v <= 0 ? undefined : v);
-          }}
+          onChange={(e) => onMaxTokensChange(parseMaxTokens(e.target.value))}
           style={{
             width: '100%',
             background: 'var(--bg)',
