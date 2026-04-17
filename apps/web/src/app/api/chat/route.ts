@@ -9,14 +9,14 @@ export const dynamic = 'force-dynamic';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-export const SYSTEM_PROMPT =
+const SYSTEM_PROMPT =
   `You are a helpful assistant for the OpenRouter MCP Registry. ` +
   `You help users explore, search, and compare AI models available through OpenRouter. ` +
   `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
 
-export const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
+const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
 
-export const AGENT_PARAMETERS = {
+const AGENT_PARAMETERS = {
   tool_choice: 'auto',
   max_steps: 10,
   stream: true,
