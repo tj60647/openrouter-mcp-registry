@@ -59,8 +59,10 @@ export async function generatePendingEmbeddings(apiKey: string): Promise<number>
         row.id,
       ]);
       count++;
-    } catch {
-      // Skip this model and continue; it will be retried on the next sync run.
+    } catch (err) {
+      // Log and continue — this model will be retried on the next sync run.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[embeddings] Failed to generate embedding for model "${row.id}": ${message}`);
     }
   }
   return count;
