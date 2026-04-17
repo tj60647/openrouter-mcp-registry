@@ -32,10 +32,9 @@ interface AgentConfig {
 // ── Example prompts ───────────────────────────────────────────────────────────
 
 const EXAMPLE_PROMPTS = [
-  { label: 'Does openai/gpt-4o-mini exist?', text: 'Does the model openai/gpt-4o-mini exist in the registry?' },
-  { label: 'Latest Claude Sonnet?', text: 'What is the most recent version of Claude Sonnet available in the registry?' },
-  { label: 'Latest GPT-4 model?', text: 'What is the most recent GPT-4 model available in the registry?' },
-  { label: 'Latest Gemini model?', text: 'What is the most recent Gemini model available in the registry?' },
+  { label: 'Is gpt-4o-mini the latest?', text: 'Is openai/gpt-4o-mini the latest model in the GPT-4o-mini series?' },
+  { label: 'Is gpt-5.4 available?', text: 'Is openai/gpt-5.4 available in the registry?' },
+  { label: 'Is gpt-6.0 available?', text: 'Is openai/gpt-6.0 available in the registry?' },
   { label: 'Cheapest models', text: 'What are the cheapest models available?' },
   { label: '128k context models', text: 'Find models with at least 128k context window' },
   { label: 'Compare Claude vs GPT-4o', text: 'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o' },
@@ -772,7 +771,7 @@ export default function DemoPage() {
                         paddingRight: isUser ? '0.25rem' : 0,
                       }}
                     >
-                      {isUser ? 'You' : modelLabel}
+                      {isUser ? 'You' : 'Assistant'}
                     </div>
 
                     {isUser ? (
@@ -793,44 +792,60 @@ export default function DemoPage() {
                           .join('')}
                       </div>
                     ) : (
-                      <div
-                        style={{
-                          background: 'var(--bg-hover)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '12px 12px 12px 2px',
-                          padding: '0.75rem 1rem',
-                          lineHeight: 1.6,
-                          fontSize: '0.925rem',
-                          maxWidth: '90%',
-                          minWidth: 0,
-                        }}
-                      >
-                        {!message.parts.some(
-                          (p) =>
-                            p.type === 'text' ||
-                            p.type === 'reasoning' ||
-                            p.type === 'dynamic-tool'
-                        ) && loading ? (
-                          <div style={{ padding: '0.25rem 0' }}>
-                            <PulsingIndicator label="Thinking" />
+                      <>
+                        <div
+                          style={{
+                            background: 'var(--bg-hover)',
+                            border: '1px solid var(--border)',
+                            borderRadius: '12px 12px 12px 2px',
+                            padding: '0.75rem 1rem',
+                            lineHeight: 1.6,
+                            fontSize: '0.925rem',
+                            maxWidth: '90%',
+                            minWidth: 0,
+                          }}
+                        >
+                          {!message.parts.some(
+                            (p) =>
+                              p.type === 'text' ||
+                              p.type === 'reasoning' ||
+                              p.type === 'dynamic-tool'
+                          ) && loading ? (
+                            <div style={{ padding: '0.25rem 0' }}>
+                              <PulsingIndicator label="Thinking" />
+                            </div>
+                          ) : (
+                            message.parts.map((part, i) => {
+                              if (part.type === 'reasoning') {
+                                return <ReasoningBlock key={i} content={part.text} />;
+                              }
+                              if (part.type === 'dynamic-tool') {
+                                return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
+                              }
+                              if (part.type === 'text') {
+                                return (
+                                  <MarkdownRenderer key={i} content={(part as TextUIPart).text} />
+                                );
+                              }
+                              return null;
+                            })
+                          )}
+                        </div>
+                        {modelLabel && (
+                          <div
+                            style={{
+                              fontSize: '0.65rem',
+                              color: 'var(--text-muted)',
+                              opacity: 0.6,
+                              marginTop: '0.2rem',
+                              paddingLeft: '0.35rem',
+                              fontFamily: 'var(--mono)',
+                            }}
+                          >
+                            {modelLabel}
                           </div>
-                        ) : (
-                          message.parts.map((part, i) => {
-                            if (part.type === 'reasoning') {
-                              return <ReasoningBlock key={i} content={part.text} />;
-                            }
-                            if (part.type === 'dynamic-tool') {
-                              return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
-                            }
-                            if (part.type === 'text') {
-                              return (
-                                <MarkdownRenderer key={i} content={(part as TextUIPart).text} />
-                              );
-                            }
-                            return null;
-                          })
                         )}
-                      </div>
+                      </>
                     )}
                   </div>
                 );
@@ -920,9 +935,7 @@ export default function DemoPage() {
             style={{
               display: 'flex',
               gap: '0.4rem',
-              overflowX: 'auto',
-              paddingBottom: '0.15rem',
-              flexWrap: 'nowrap',
+              flexWrap: 'wrap',
             }}
           >
             {EXAMPLE_PROMPTS.map((p) => (
