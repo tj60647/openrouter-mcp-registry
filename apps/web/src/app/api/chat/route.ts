@@ -70,11 +70,11 @@ export async function POST(req: Request): Promise<Response> {
 
   const { messages } = (await req.json()) as { messages: UIMessage[] };
 
-  let mcpClient: Client | null = null;
-  try {
-    mcpClient = await connectMcpClient(mcpUrl);
-  } catch (err) {
+  const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
     console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
+    return null;
+  });
+  if (!mcpClient) {
     return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
   }
 
@@ -89,7 +89,7 @@ export async function POST(req: Request): Promise<Response> {
           description: t.description ?? '',
           inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
           execute: async (args: unknown): Promise<string> => {
-            const result = await mcpClient!.callTool({
+            const result = await mcpClient.callTool({
               name: t.name,
               arguments: args as Record<string, unknown>,
             });
@@ -118,7 +118,7 @@ export async function POST(req: Request): Promise<Response> {
       tools,
       stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
       onFinish: async () => {
-        await mcpClient!.close().catch(() => {});
+        await mcpClient.close().catch(() => {});
       },
     });
 

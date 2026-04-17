@@ -299,7 +299,7 @@ export default function DemoPage() {
   // Fetch agent config on mount
   useEffect(() => {
     fetch('/api/chat')
-      .then((r) => r.json() as Promise<AgentConfig>)
+      .then(async (r) => (await r.json()) as AgentConfig)
       .then((cfg) => setAgentConfig(cfg))
       .catch(() => {});
   }, []);
@@ -319,7 +319,7 @@ export default function DemoPage() {
   function openAgentModal() {
     if (!agentConfig) {
       fetch('/api/chat')
-        .then((r) => r.json() as Promise<AgentConfig>)
+        .then(async (r) => (await r.json()) as AgentConfig)
         .then((cfg) => setAgentConfig(cfg))
         .catch(() => {});
     }
