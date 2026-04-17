@@ -29,7 +29,7 @@ export default function McpInfoPage() {
             },
             {
               name: 'resolve_model',
-              description: 'Resolve an alias or ID to its canonical form',
+              description: 'Resolve a model ID to its canonical form and fetch its details',
               params: '{ input: string }',
             },
             {
@@ -146,11 +146,11 @@ export default function McpInfoPage() {
         <div className="stack">
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
-              Resolve a model alias in your agent:
+              Resolve a model ID in your agent:
             </p>
             <pre><code>{`// In your agent/assistant:
-const result = await mcp.callTool('resolve_model', { input: 'sonnet' });
-// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'alias', found: true }`}</code></pre>
+const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
+// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true }`}</code></pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>

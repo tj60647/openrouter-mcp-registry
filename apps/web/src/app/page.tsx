@@ -9,7 +9,7 @@ flowchart LR
 
   subgraph Mcp["Vercel Deployment: mcp"]
     McpApp["apps/mcp<br/>Next.js MCP + REST"]
-    Database[("Vercel Postgres<br/>models<br/>aliases<br/>sync_status")]
+    Database[("Vercel Postgres<br/>models<br/>sync_status")]
     Cron["Scheduled sync job"]
   end
 
@@ -51,7 +51,7 @@ export default function HomePage() {
         <div className="card">
           <h3>🔍 Model Resolution</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Resolve any alias (sonnet, gpt-4o) or canonical ID to the exact model. Never worry about stale names again.
+            Resolve any canonical model ID to the exact registered model. Never worry about stale names again.
           </p>
           <Link href="/resolve">Try Resolver →</Link>
         </div>
@@ -71,31 +71,6 @@ export default function HomePage() {
 
       <div className="grid-2">
         <div className="card">
-          <h3>Supported Aliases</h3>
-          <table>
-            <thead>
-              <tr><th>Alias</th><th>Resolves To</th></tr>
-            </thead>
-            <tbody>
-              {[
-                ['auto', 'openrouter/auto'],
-                ['sonnet', 'anthropic/claude-sonnet-4-5'],
-                ['haiku', 'anthropic/claude-haiku-4-5'],
-                ['fast-general', 'anthropic/claude-haiku-4-5'],
-                ['best-general', 'anthropic/claude-sonnet-4-5'],
-                ['gpt-4o', 'openai/gpt-4o'],
-                ['gemini', 'google/gemini-pro-1.5'],
-                ['mistral', 'mistralai/mistral-large'],
-              ].map(([alias, model]) => (
-                <tr key={alias}>
-                  <td><code>{alias}</code></td>
-                  <td><code style={{ color: 'var(--text-muted)' }}>{model}</code></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
           <h3>Quick Start</h3>
           <div className="stack" style={{ gap: '0.75rem' }}>
             <div>
@@ -103,8 +78,8 @@ export default function HomePage() {
               <pre><code>GET /api/models</code></pre>
             </div>
             <div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>Resolve alias</p>
-              <pre><code>POST /api/resolve{'\n'}{'{"input":"sonnet"}'}</code></pre>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>Resolve model ID</p>
+              <pre><code>POST /api/resolve{'\n'}{'{"input":"anthropic/claude-sonnet-4-5"}'}</code></pre>
             </div>
             <div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>MCP endpoint (separate deployment)</p>
