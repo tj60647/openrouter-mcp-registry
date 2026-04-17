@@ -305,6 +305,56 @@ If `MCP_API_KEY` is set:
 }
 ```
 
+### GitHub Copilot (VS Code)
+
+Add to your workspace's `.vscode/mcp.json` (or to your user `settings.json` under the `"mcp"` key):
+
+```json
+{
+  "servers": {
+    "openrouter-registry": {
+      "type": "http",
+      "url": "https://your-mcp-app.vercel.app/api/mcp"
+    }
+  }
+}
+```
+
+If `MCP_API_KEY` is set, add a `headers` field:
+
+```json
+{
+  "servers": {
+    "openrouter-registry": {
+      "type": "http",
+      "url": "https://your-mcp-app.vercel.app/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_API_KEY"
+      }
+    }
+  }
+}
+```
+
+> VS Code discovers `.vscode/mcp.json` automatically. You can also add the same block under `"mcp": { "servers": { ... } }` in your user or workspace `settings.json`.
+
+### OpenAI Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.openrouter-registry]
+url = "https://your-mcp-app.vercel.app/api/mcp"
+```
+
+If `MCP_API_KEY` is set:
+
+```toml
+[mcp_servers.openrouter-registry]
+url = "https://your-mcp-app.vercel.app/api/mcp"
+bearer_token = "YOUR_MCP_API_KEY"
+```
+
 ### Using in an agent
 
 ```typescript

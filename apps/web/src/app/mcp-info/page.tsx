@@ -142,6 +142,41 @@ export default function McpInfoPage() {
       </div>
 
       <div className="card">
+        <h2>GitHub Copilot (VS Code)</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Add to your workspace{`'`}s <code>.vscode/mcp.json</code> (or under <code>&quot;mcp&quot;</code> in{' '}
+          <code>settings.json</code>):
+        </p>
+        <pre><code>{JSON.stringify(
+          {
+            servers: {
+              'openrouter-registry': {
+                type: 'http',
+                url: `${baseUrl}/api/mcp`,
+              },
+            },
+          },
+          null,
+          2
+        )}</code></pre>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
+          If <code>MCP_API_KEY</code> is configured, add a <code>headers</code> object with{' '}
+          <code>{`"Authorization": "Bearer YOUR_MCP_API_KEY"`}</code>.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>OpenAI Codex CLI</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Add to <code>~/.codex/config.toml</code>:
+        </p>
+        <pre><code>{`[mcp_servers.openrouter-registry]\nurl = "${baseUrl}/api/mcp"`}</code></pre>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
+          If <code>MCP_API_KEY</code> is configured, add <code>bearer_token = &quot;YOUR_MCP_API_KEY&quot;</code> on the next line.
+        </p>
+      </div>
+
+      <div className="card">
         <h2>Usage Examples</h2>
         <div className="stack">
           <div>
