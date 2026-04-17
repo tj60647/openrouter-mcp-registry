@@ -11,8 +11,10 @@ import {
   getModelById,
   getSyncStatus,
   findModelsByCriteria,
+  semanticSearchModels,
 } from '../../../lib/db';
 import { validateMcpToken } from '../../../lib/auth';
+import { generateEmbedding } from '../../../lib/embeddings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +35,12 @@ function createMcpServer(): McpServer {
       provider: z.string().optional(),
       query: z.string().optional().describe('Text search across model ID, display name, and provider'),
       sortBy: z
-        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .enum([
+          'id', 'display_name', 'provider',
+          'context_length', 'max_completion_tokens',
+          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
+          'created_at',
+        ])
         .optional()
         .default('id')
         .describe('Column to sort results by'),
@@ -127,7 +134,12 @@ function createMcpServer(): McpServer {
       limit: z.number().int().min(1).max(100).optional().default(20),
       offset: z.number().int().min(0).optional().default(0),
       sortBy: z
-        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .enum([
+          'id', 'display_name', 'provider',
+          'context_length', 'max_completion_tokens',
+          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
+          'created_at',
+        ])
         .optional()
         .default('id')
         .describe('Column to sort results by'),
@@ -153,7 +165,7 @@ function createMcpServer(): McpServer {
   // Tool: find_models_by_criteria
   server.tool(
     'find_models_by_criteria',
-    'Filter models by budget and context constraints. All parameters are optional — omit any you don\'t care about. Models with NULL prices are always included (treated as free/unknown).',
+    'Filter models by budget, context, and capability constraints. All parameters are optional — omit any you don\'t care about. Models with NULL prices are always included (treated as free/unknown).',
     {
       maxInputPricePer1k: z
         .number()
@@ -171,20 +183,30 @@ function createMcpServer(): McpServer {
         .positive()
         .optional()
         .describe('Minimum context window size in tokens'),
+      modality: z
+        .string()
+        .optional()
+        .describe('Filter by modality string (e.g. "text+image->text" for vision models, "text->text" for text-only). Partial match supported.'),
       limit: z.number().int().min(1).max(200).optional().default(50),
       offset: z.number().int().min(0).optional().default(0),
       sortBy: z
-        .enum(['id', 'display_name', 'provider', 'context_length', 'input_price_per_1k', 'output_price_per_1k'])
+        .enum([
+          'id', 'display_name', 'provider',
+          'context_length', 'max_completion_tokens',
+          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
+          'created_at',
+        ])
         .optional()
         .default('id')
         .describe('Column to sort results by'),
     },
-    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset, sortBy }) => {
+    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy }) => {
       try {
         const models = await findModelsByCriteria({
           maxInputPricePer1k,
           maxOutputPricePer1k,
           minContextLength,
+          modality,
           limit,
           offset,
           sortBy,
@@ -230,9 +252,14 @@ function createMcpServer(): McpServer {
           found,
           displayName: model?.displayName ?? null,
           provider: model?.provider ?? null,
+          description: model?.description ?? null,
+          modality: model?.modality ?? null,
           contextLength: model?.contextLength ?? null,
+          maxCompletionTokens: model?.maxCompletionTokens ?? null,
           inputPricePer1k: model?.inputPricePer1k ?? null,
           outputPricePer1k: model?.outputPricePer1k ?? null,
+          imagePricePer1k: model?.imagePricePer1k ?? null,
+          createdAt: model?.createdAt ?? null,
           metadata: model?.metadata ?? null,
         }));
 
@@ -241,6 +268,50 @@ function createMcpServer(): McpServer {
             {
               type: 'text',
               text: JSON.stringify({ comparison }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // Tool: semantic_search
+  server.tool(
+    'semantic_search',
+    'Find models by semantic similarity to a natural language description. Describe what you need (e.g. "fast cheap summarization model", "multimodal vision model for images") and get the most relevant matches. Requires OPENAI_API_KEY to be configured on the server.',
+    {
+      query: z
+        .string()
+        .min(1)
+        .max(1000)
+        .describe('Natural language description of the kind of model you are looking for'),
+      limit: z.number().int().min(1).max(50).optional().default(10),
+      offset: z.number().int().min(0).optional().default(0),
+    },
+    async ({ query, limit, offset }) => {
+      try {
+        const openaiKey = process.env['OPENAI_API_KEY'];
+        if (!openaiKey) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Semantic search is unavailable: OPENAI_API_KEY is not configured on this server.',
+              },
+            ],
+            isError: true,
+          };
+        }
+        const embedding = await generateEmbedding(query, openaiKey);
+        const models = await semanticSearchModels({ embedding, limit, offset });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ models, count: models.length }, null, 2),
             },
           ],
         };
@@ -474,6 +545,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       'search_models',
       'find_models_by_criteria',
       'compare_models',
+      'semantic_search',
       'get_registry_status',
     ],
     resources: [

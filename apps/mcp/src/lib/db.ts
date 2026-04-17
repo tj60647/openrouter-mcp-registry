@@ -10,8 +10,11 @@ const SORT_COLUMN_MAP: Record<string, string> = {
   display_name: 'display_name',
   provider: 'provider',
   context_length: 'context_length',
+  max_completion_tokens: 'max_completion_tokens',
   input_price_per_1k: 'input_price_per_1k',
   output_price_per_1k: 'output_price_per_1k',
+  image_price_per_1k: 'image_price_per_1k',
+  created_at: 'created_at',
 };
 
 export type SortBy = keyof typeof SORT_COLUMN_MAP;
@@ -103,11 +106,12 @@ export async function findModelsByCriteria(opts: {
   maxInputPricePer1k?: number;
   maxOutputPricePer1k?: number;
   minContextLength?: number;
+  modality?: string;
   limit: number;
   offset: number;
   sortBy?: string;
 }): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, limit, offset, sortBy } = opts;
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy } = opts;
   const orderCol = resolveOrderBy(sortBy);
 
   const conditions: string[] = [];
@@ -125,12 +129,33 @@ export async function findModelsByCriteria(opts: {
     params.push(minContextLength);
     conditions.push(`context_length >= $${params.length}`);
   }
+  if (modality) {
+    params.push(`%${modality}%`);
+    conditions.push(`modality ILIKE $${params.length}`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
   const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
   const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
+  return result.rows.map(rowToModel);
+}
+
+export async function semanticSearchModels(opts: {
+  embedding: number[];
+  limit: number;
+  offset: number;
+}): Promise<Model[]> {
+  const { embedding, limit, offset } = opts;
+  const embeddingLiteral = `[${embedding.join(',')}]`;
+  const result = await db.query<ModelRow>(
+    `SELECT * FROM models
+     WHERE description_embedding IS NOT NULL
+     ORDER BY description_embedding <=> $1
+     LIMIT $2 OFFSET $3`,
+    [embeddingLiteral, limit, offset]
+  );
   return result.rows.map(rowToModel);
 }
 
@@ -143,26 +168,45 @@ export function createModelRepository(): ModelRepository {
       try {
         await client.sql`BEGIN`;
         for (const model of models) {
-          await client.sql`
-            INSERT INTO models (id, provider, display_name, context_length, input_price_per_1k, output_price_per_1k, metadata, fetched_at)
+        await client.sql`
+            INSERT INTO models (
+              id, provider, display_name, description, modality,
+              context_length, max_completion_tokens,
+              input_price_per_1k, output_price_per_1k, image_price_per_1k,
+              created_at, metadata, fetched_at
+            )
             VALUES (
               ${model.id},
               ${model.provider},
               ${model.displayName},
+              ${model.description},
+              ${model.modality},
               ${model.contextLength},
+              ${model.maxCompletionTokens},
               ${model.inputPricePer1k},
               ${model.outputPricePer1k},
+              ${model.imagePricePer1k},
+              ${model.createdAt?.toISOString() ?? null},
               ${JSON.stringify(model.metadata)},
               ${model.fetchedAt.toISOString()}
             )
             ON CONFLICT (id) DO UPDATE SET
               provider = EXCLUDED.provider,
               display_name = EXCLUDED.display_name,
+              description = EXCLUDED.description,
+              modality = EXCLUDED.modality,
               context_length = EXCLUDED.context_length,
+              max_completion_tokens = EXCLUDED.max_completion_tokens,
               input_price_per_1k = EXCLUDED.input_price_per_1k,
               output_price_per_1k = EXCLUDED.output_price_per_1k,
+              image_price_per_1k = EXCLUDED.image_price_per_1k,
+              created_at = EXCLUDED.created_at,
               metadata = EXCLUDED.metadata,
-              fetched_at = EXCLUDED.fetched_at
+              fetched_at = EXCLUDED.fetched_at,
+              description_embedding = CASE
+                WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                ELSE models.description_embedding
+              END
           `;
         }
         await client.sql`COMMIT`;

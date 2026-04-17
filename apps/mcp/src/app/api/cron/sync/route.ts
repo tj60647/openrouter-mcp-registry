@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ModelSyncService, OpenRouterProvider, logger } from '@openrouter-mcp/shared';
 import { createModelRepository } from '../../../../lib/db';
+import { generatePendingEmbeddings } from '../../../../lib/embeddings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     logger.info('Cron sync started');
     const result = await syncService.sync();
     logger.info('Cron sync completed', { result });
+
+    // Generate embeddings for any models that now have a description but no vector yet.
+    const openaiKey = process.env['OPENAI_API_KEY'];
+    if (result.success && openaiKey) {
+      const embeddingsGenerated = await generatePendingEmbeddings(openaiKey);
+      logger.info('Embeddings generated', { embeddingsGenerated });
+      return NextResponse.json({ ...result, embeddingsGenerated });
+    }
 
     return NextResponse.json(result);
   } catch (err) {
