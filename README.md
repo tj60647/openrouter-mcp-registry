@@ -98,7 +98,7 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 | `resolve_model` | Resolve and look up a model by ID | `input: string` |
 | `get_model` | Get full details for a model | `id: string` |
 | `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset` |
-| `find_models_by_criteria` | Filter by budget and context | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength` |
+| `find_models_by_criteria` | Filter by budget and context | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `limit`, `offset` |
 | `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
 | `get_registry_status` | Current sync state | — |
 
@@ -308,23 +308,50 @@ If `MCP_API_KEY` is set:
 ```typescript
 // Resolve a model ID to its canonical form and fetch its details
 const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
-// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true }
+// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true, model: {...} }
 
-// List all available models
+// List all available models (with optional provider filter and text search)
 const models = await mcp.callTool('list_models', { limit: 50, provider: 'anthropic' });
+
+// Search models by name, ID, or provider substring
+const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });
+
+// Get full details for a single model by canonical ID
+const model = await mcp.callTool('get_model', { id: 'anthropic/claude-sonnet-4-5' });
+
+// Find models that fit a budget and context requirement
+const affordable = await mcp.callTool('find_models_by_criteria', {
+  maxInputPricePer1k: 0.005,
+  maxOutputPricePer1k: 0.015,
+  minContextLength: 32000,
+  limit: 20,
+});
+
+// Compare 2–5 models side-by-side (pricing, context length, metadata)
+const comparison = await mcp.callTool('compare_models', {
+  ids: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5'],
+});
+
+// Get the current registry sync status
+const status = await mcp.callTool('get_registry_status', {});
 
 // Read the full model list as a resource
 const resource = await mcp.readResource('registry://models');
 // → { contents: [{ mimeType: 'application/json', text: '{"models":[...]}' }] }
 
 // Read a specific model as a resource
-const model = await mcp.readResource('registry://models/anthropic%2Fclaude-sonnet-4-5');
+const modelResource = await mcp.readResource('registry://models/anthropic%2Fclaude-sonnet-4-5');
 
 // Use the select_model prompt to guide model selection
 const prompt = await mcp.getPrompt('select_model', {
   task_description: 'Summarize long legal documents',
   budget_usd_per_1k_tokens: '0.005',
   min_context_length: '32000',
+});
+
+// Use the compare_models_prompt to guide a structured comparison
+const comparePrompt = await mcp.getPrompt('compare_models_prompt', {
+  model_ids: 'anthropic/claude-sonnet-4-5,openai/gpt-4o',
 });
 ```
 

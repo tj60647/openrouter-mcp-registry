@@ -45,11 +45,11 @@ export default function McpInfoPage() {
             {
               name: 'find_models_by_criteria',
               description: 'Filter models by budget and context constraints',
-              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number }',
+              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, limit?: number, offset?: number }',
             },
             {
               name: 'compare_models',
-              description: 'Compare 2–5 models side-by-side on pricing and context length',
+              description: 'Compare 2–5 models side-by-side on pricing, context length, and metadata',
               params: '{ ids: string[] }',
             },
             {
@@ -150,7 +150,32 @@ export default function McpInfoPage() {
             </p>
             <pre><code>{`// In your agent/assistant:
 const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
-// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true }`}</code></pre>
+// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true, model: {...} }`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Search models by name or provider:
+            </p>
+            <pre><code>{`const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Find models within a budget and context window:
+            </p>
+            <pre><code>{`const models = await mcp.callTool('find_models_by_criteria', {
+  maxInputPricePer1k: 0.005,
+  maxOutputPricePer1k: 0.015,
+  minContextLength: 32000,
+  limit: 20,
+});`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Compare models side-by-side:
+            </p>
+            <pre><code>{`const comparison = await mcp.callTool('compare_models', {
+  ids: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5'],
+});`}</code></pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
@@ -169,6 +194,14 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
   min_context_length: '32000',
 });
 // → prompt messages that instruct the model how to pick the best option`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Use the compare_models_prompt for a structured comparison:
+            </p>
+            <pre><code>{`const prompt = await mcp.getPrompt('compare_models_prompt', {
+  model_ids: 'anthropic/claude-sonnet-4-5,openai/gpt-4o',
+});`}</code></pre>
           </div>
         </div>
       </div>
