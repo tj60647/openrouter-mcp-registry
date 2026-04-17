@@ -86,16 +86,40 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
 
-## MCP Tools
+## MCP Capabilities
 
-Connect any MCP-compatible client to `POST /api/mcp`:
+Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools**, **resources**, and **prompts**.
+
+### Tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `list_models` | List all registry models | `limit`, `offset`, `provider` |
+| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query` |
 | `resolve_model` | Resolve alias or ID | `input: string` |
-| `get_default_model` | Get the default model | — |
-| `get_sync_status` | Current sync state | — |
+| `get_model` | Get full details for a model | `id: string` |
+| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset` |
+| `find_models_by_criteria` | Filter by budget and context | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength` |
+| `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
+| `get_registry_status` | Current sync state | — |
+
+### Resources
+
+Read-only data accessible via `resources/read`:
+
+| URI | Description |
+|-----|-------------|
+| `registry://models` | Full model list (up to 500) |
+| `registry://status` | Sync status (last sync time, record count, errors) |
+| `registry://models/{id}` | Details for a specific model (URL-encode the ID) |
+
+### Prompts
+
+Reusable reasoning templates accessible via `prompts/get`:
+
+| Prompt | Description | Parameters |
+|--------|-------------|------------|
+| `select_model` | Guide model selection for a task | `task_description`, `budget_usd_per_1k_tokens?`, `min_context_length?` |
+| `compare_models_prompt` | Guide side-by-side model comparison | `model_ids` (comma-separated) |
 
 ---
 
@@ -305,8 +329,19 @@ const result = await mcp.callTool('resolve_model', { input: 'sonnet' });
 // List all available models
 const models = await mcp.callTool('list_models', { limit: 50, provider: 'anthropic' });
 
-// Get the default model
-const def = await mcp.callTool('get_default_model', {});
+// Read the full model list as a resource
+const resource = await mcp.readResource('registry://models');
+// → { contents: [{ mimeType: 'application/json', text: '{"models":[...]}' }] }
+
+// Read a specific model as a resource
+const model = await mcp.readResource('registry://models/anthropic%2Fclaude-sonnet-4-5');
+
+// Use the select_model prompt to guide model selection
+const prompt = await mcp.getPrompt('select_model', {
+  task_description: 'Summarize long legal documents',
+  budget_usd_per_1k_tokens: '0.005',
+  min_context_length: '32000',
+});
 ```
 
 ---

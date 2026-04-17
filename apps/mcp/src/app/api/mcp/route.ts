@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
 import {
@@ -258,6 +258,158 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ── Resources ─────────────────────────────────────────────────────────────
+
+  // Resource: full model list
+  server.resource(
+    'registry-models',
+    'registry://models',
+    { description: 'Full list of models currently in the registry', mimeType: 'application/json' },
+    async (uri) => {
+      try {
+        const models = await getModels({ limit: 500, offset: 0 });
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify({ models, count: models.length }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to read registry models: ${message}`);
+      }
+    }
+  );
+
+  // Resource: sync status
+  server.resource(
+    'registry-status',
+    'registry://status',
+    { description: 'Current sync status of the model registry (last sync time, record count, errors)', mimeType: 'application/json' },
+    async (uri) => {
+      try {
+        const status = await getSyncStatus();
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify({ status }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to read registry status: ${message}`);
+      }
+    }
+  );
+
+  // Resource template: individual model by canonical ID
+  server.resource(
+    'model',
+    new ResourceTemplate('registry://models/{id}', { list: undefined }),
+    { description: 'Details for a specific model by its canonical ID (e.g. registry://models/anthropic%2Fclaude-sonnet-4-5)', mimeType: 'application/json' },
+    async (uri, { id }) => {
+      try {
+        const modelId = decodeURIComponent(Array.isArray(id) ? id[0] : id);
+        const model = await getModelById(modelId);
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify({ found: model !== null, model }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to read model resource: ${message}`);
+      }
+    }
+  );
+
+  // ── Prompts ───────────────────────────────────────────────────────────────
+
+  // Prompt: select_model — guide the model through selecting the best model for a task
+  server.prompt(
+    'select_model',
+    'Generate a structured prompt to help select the best model for a given task, budget, and context requirements.',
+    {
+      task_description: z.string().describe('Description of the task or use case'),
+      budget_usd_per_1k_tokens: z.string().optional().describe('Maximum price in USD per 1,000 tokens (leave blank for no budget limit)'),
+      min_context_length: z.string().optional().describe('Minimum required context window in tokens (leave blank for no minimum)'),
+    },
+    ({ task_description, budget_usd_per_1k_tokens, min_context_length }) => {
+      const budgetNote = budget_usd_per_1k_tokens
+        ? `Budget constraint: max $${budget_usd_per_1k_tokens} per 1,000 tokens.`
+        : 'No budget constraint.';
+      const contextNote = min_context_length
+        ? `Minimum context window: ${min_context_length} tokens.`
+        : 'No minimum context window required.';
+
+      return {
+        description: 'Select the best model for a task',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `You are a model selection assistant with access to the OpenRouter model registry.
+
+Task: ${task_description}
+${budgetNote}
+${contextNote}
+
+Steps:
+1. Use the find_models_by_criteria tool to fetch candidate models that satisfy the budget and context constraints.
+2. Use the search_models tool if you need to refine by provider or name.
+3. Use the compare_models tool on the top 2–5 candidates.
+4. Recommend the best model and explain your reasoning (capability, cost, context fit).`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // Prompt: compare_models_prompt — guide the model through a structured comparison
+  server.prompt(
+    'compare_models_prompt',
+    'Generate a structured prompt to compare a set of models side-by-side on pricing, context length, and capabilities.',
+    {
+      model_ids: z.string().describe('Comma-separated list of 2–5 canonical model IDs to compare (e.g. "anthropic/claude-sonnet-4-5,openai/gpt-4o")'),
+    },
+    ({ model_ids }) => {
+      const ids = model_ids.split(',').map((s) => s.trim()).filter(Boolean);
+
+      return {
+        description: 'Compare models side-by-side',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `You are a model comparison assistant with access to the OpenRouter model registry.
+
+Compare the following models: ${ids.join(', ')}
+
+Steps:
+1. Call the compare_models tool with ids: ${JSON.stringify(ids)}.
+2. Present a clear side-by-side comparison table covering: display name, provider, context length, input price per 1k tokens, output price per 1k tokens.
+3. Highlight the trade-offs between cost and capability.
+4. Provide a final recommendation with justification.`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
   return server;
 }
 
@@ -307,6 +459,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       'find_models_by_criteria',
       'compare_models',
       'get_registry_status',
+    ],
+    resources: [
+      'registry://models',
+      'registry://status',
+      'registry://models/{id}',
+    ],
+    prompts: [
+      'select_model',
+      'compare_models_prompt',
     ],
     transport: 'streamable-http',
     endpoint: '/api/mcp',
