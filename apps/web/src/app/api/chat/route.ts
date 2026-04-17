@@ -47,11 +47,15 @@ async function connectMcpClient(mcpUrl: string): Promise<Client> {
     ? { headers: { Authorization: `Bearer ${mcpApiKey}` } }
     : {};
 
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`${mcpUrl}/api/mcp`);
+  } catch {
+    throw new Error(`MCP_URL is not a valid URL: "${mcpUrl}"`);
+  }
+
   const client = new Client({ name: 'web-demo', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`${mcpUrl}/api/mcp`),
-    { requestInit }
-  );
+  const transport = new StreamableHTTPClientTransport(endpoint, { requestInit });
   await client.connect(transport);
   return client;
 }

@@ -3,7 +3,7 @@ import MermaidDiagram from '../components/MermaidDiagram';
 
 const architectureChart = `
 flowchart LR
-  subgraph Web["Vercel Deployment: web (direct DB — not an MCP client)"]
+  subgraph Web["Vercel Deployment: web (demo UI + MCP-client chatbot)"]
     WebApp["apps/web<br/>Next.js demo UI"]
   end
 
@@ -19,6 +19,7 @@ flowchart LR
 
   Shared --> WebApp
   Shared --> McpApp
+  WebApp -->|MCP Streamable HTTP| McpApp
   WebApp --> Database
   McpApp --> Database
   Clients --> McpApp
