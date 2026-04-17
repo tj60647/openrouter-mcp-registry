@@ -6,7 +6,7 @@ import type { Model } from '@openrouter-mcp/shared';
 interface ResolveResponse {
   input: string;
   resolved: string;
-  source: 'alias' | 'canonical' | 'normalized';
+  source: 'canonical' | 'normalized';
   found: boolean;
   model: Model | null;
 }
@@ -42,14 +42,14 @@ export default function ResolvePage() {
     }
   }
 
-  const quickAliases = ['sonnet', 'haiku', 'gpt-4o', 'auto', 'fast-general', 'gemini'];
+  const quickExamples = ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5', 'openrouter/auto'];
 
   return (
     <div className="stack">
       <div>
         <h1>Resolve Model</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          Enter an alias or canonical model ID to resolve it to the registered model.
+          Enter a canonical model ID to resolve it to the registered model.
         </p>
       </div>
 
@@ -57,25 +57,25 @@ export default function ResolvePage() {
         <form onSubmit={handleResolve} className="stack">
           <div>
             <label htmlFor="model-input" style={{ display: 'block', marginBottom: '0.4rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Model alias or ID
+              Model ID
             </label>
             <input
               id="model-input"
               type="text"
-              placeholder="e.g. sonnet, openai/gpt-4o, fast-general"
+              placeholder="e.g. anthropic/claude-sonnet-4-5, openai/gpt-4o"
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
           </div>
           <div className="row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
-            {quickAliases.map((alias) => (
+            {quickExamples.map((example) => (
               <button
-                key={alias}
+                key={example}
                 type="button"
-                onClick={() => setInput(alias)}
+                onClick={() => setInput(example)}
                 style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
               >
-                {alias}
+                {example}
               </button>
             ))}
           </div>
@@ -102,7 +102,7 @@ export default function ResolvePage() {
               </div>
               <div>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.2rem' }}>Source</p>
-                <span className={`badge badge-${result.source === 'alias' ? 'info' : result.source === 'canonical' ? 'success' : 'warning'}`}>
+                <span className={`badge badge-${result.source === 'canonical' ? 'success' : 'warning'}`}>
                   {result.source}
                 </span>
               </div>

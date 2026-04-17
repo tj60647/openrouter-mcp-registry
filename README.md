@@ -13,7 +13,7 @@ AI coding assistants and agents that call LLM APIs directly suffer from:
 
 This registry solves all three problems:
 - Fetches the live model catalog from OpenRouter weekly (and on-demand)
-- Exposes a stable alias layer (`sonnet`, `fast-general`, `auto`, …)
+- Normalizes model IDs to a canonical form across providers
 - Serves an MCP-compatible endpoint that AI clients can query
 
 ---
@@ -26,7 +26,7 @@ graph TD
 
     subgraph mcp_deploy["Vercel Project · apps/mcp  ← deploy this first"]
         mcpApp["apps/mcp\nNext.js · MCP + REST API"]
-        db[("Neon Postgres\nmodels · aliases · sync_status")]
+        db[("Neon Postgres\nmodels · sync_status")]
         cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
     end
 
@@ -69,7 +69,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 |--------|------|-------------|
 | `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`) |
 | `GET` | `/api/models/:id` | Get model by canonical ID |
-| `POST` | `/api/resolve` | Resolve alias/ID → canonical model |
+| `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check + sync status summary |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`) |
@@ -81,7 +81,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/models` | List cached models |
-| `POST` | `/api/resolve` | Resolve alias/ID → canonical model |
+| `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
@@ -95,7 +95,7 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `list_models` | List all registry models | `limit`, `offset`, `provider`, `query` |
-| `resolve_model` | Resolve alias or ID | `input: string` |
+| `resolve_model` | Resolve and look up a model by ID | `input: string` |
 | `get_model` | Get full details for a model | `id: string` |
 | `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset` |
 | `find_models_by_criteria` | Filter by budget and context | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength` |
@@ -120,22 +120,6 @@ Reusable reasoning templates accessible via `prompts/get`:
 |--------|-------------|------------|
 | `select_model` | Guide model selection for a task | `task_description`, `budget_usd_per_1k_tokens?`, `min_context_length?` |
 | `compare_models_prompt` | Guide side-by-side model comparison | `model_ids` (comma-separated) |
-
----
-
-## Default Aliases
-
-| Alias | Resolves to |
-|-------|-------------|
-| `auto` | `openrouter/auto` |
-| `sonnet` | `anthropic/claude-sonnet-4-5` |
-| `haiku` | `anthropic/claude-haiku-4-5` |
-| `opus` | `anthropic/claude-opus-4-5` |
-| `fast-general` | `anthropic/claude-haiku-4-5` |
-| `best-general` | `anthropic/claude-sonnet-4-5` |
-| `gpt-4o` | `openai/gpt-4o` |
-| `gemini` | `google/gemini-pro-1.5` |
-| `mistral` | `mistralai/mistral-large` |
 
 ---
 
@@ -184,7 +168,7 @@ pnpm dev
 | `pnpm typecheck` | TypeScript type check |
 | `pnpm lint` | Lint all packages |
 | `pnpm db:migrate` | Run database migrations |
-| `pnpm db:seed` | Seed default aliases and demo models |
+| `pnpm db:seed` | Seed demo models |
 
 ---
 
@@ -230,7 +214,7 @@ After the first deploy, run migrations against your Neon database:
 # Pull the injected env vars locally
 npx vercel env pull apps/mcp/.env.local --project <your-mcp-project-name>
 
-# Run migrations and seed default aliases
+# Run migrations and seed demo models
 pnpm db:migrate
 pnpm db:seed
 ```
@@ -322,9 +306,9 @@ If `MCP_API_KEY` is set:
 ### Using in an agent
 
 ```typescript
-// Resolve an alias to a canonical model ID
-const result = await mcp.callTool('resolve_model', { input: 'sonnet' });
-// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'alias', found: true }
+// Resolve a model ID to its canonical form and fetch its details
+const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
+// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true }
 
 // List all available models
 const models = await mcp.callTool('list_models', { limit: 50, provider: 'anthropic' });
@@ -363,14 +347,6 @@ CREATE TABLE models (
   fetched_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Stable alias → model ID mapping
-CREATE TABLE aliases (
-  alias      TEXT PRIMARY KEY,
-  model_id   TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-  scope      TEXT NOT NULL DEFAULT 'system' CHECK (scope IN ('system', 'org')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- Singleton sync state row
 CREATE TABLE sync_status (
   id                   INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -406,7 +382,6 @@ pnpm --filter @openrouter-mcp/mcp test
 
 Tests cover:
 - Model ID canonicalization
-- Alias resolution (system and custom)
 - Model registry resolution logic
 - Sync service (success, lock contention, provider errors)
 - Auth guards (admin token, MCP token)
