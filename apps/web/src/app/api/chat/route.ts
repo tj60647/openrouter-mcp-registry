@@ -146,7 +146,7 @@ export async function POST(req: Request): Promise<Response> {
     });
 
     const result = streamText({
-      model: openrouter(chatModel),
+      model: openrouter.chat(chatModel),
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
       tools,

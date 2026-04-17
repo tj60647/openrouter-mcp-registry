@@ -2,9 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-vi.mock('@ai-sdk/openai', () => ({
-  createOpenAI: vi.fn(() => vi.fn(() => 'mock-model-instance')),
-}));
+vi.mock('@ai-sdk/openai', () => {
+  const mockChatFn = vi.fn(() => 'mock-model-instance');
+  const mockProvider = Object.assign(vi.fn(() => 'mock-model-instance'), { chat: mockChatFn });
+  return {
+    createOpenAI: vi.fn(() => mockProvider),
+  };
+});
 
 vi.mock('ai', async (importOriginal) => {
   const mod = await importOriginal<typeof import('ai')>();
@@ -144,9 +148,10 @@ describe('POST /api/chat', () => {
 
     await POST(makePostRequest({ messages: [], model: 'anthropic/claude-sonnet-4-5' }));
 
-    // The model factory should have been called with the requested model
-    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value as ReturnType<typeof createOpenAI>;
-    expect(vi.mocked(modelFactory)).toHaveBeenCalledWith('anthropic/claude-sonnet-4-5');
+    // provider.chat() should have been called with the requested model
+    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((modelFactory as any).chat).toHaveBeenCalledWith('anthropic/claude-sonnet-4-5');
     expect(streamText).toHaveBeenCalled();
   });
 
@@ -156,9 +161,10 @@ describe('POST /api/chat', () => {
 
     await POST(makePostRequest({ messages: [] }));
 
-    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value as ReturnType<typeof createOpenAI>;
+    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value;
     // Default is openai/gpt-4o-mini (or whatever CHAT_MODEL env var resolves to)
-    expect(vi.mocked(modelFactory)).toHaveBeenCalledWith(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((modelFactory as any).chat).toHaveBeenCalledWith(
       expect.stringContaining('/')
     );
   });
