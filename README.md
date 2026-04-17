@@ -84,8 +84,10 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/models` | List cached models |
+| `GET` | `/api/providers` | List distinct provider names |
 | `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check |
+| `GET` | `/api/chat` | Agent config — default model, available models, and MCP tools list |
 | `POST` | `/api/chat` | Chatbot — LLM + tool calls routed through MCP |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
@@ -254,8 +256,10 @@ You can either:
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key (used by the `/demo` chatbot) |
 | `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project |
+| `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
 | `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
+| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `openai/gpt-4o-mini`) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 
 `CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`).
@@ -491,8 +495,10 @@ Tests cover:
 | `OPENROUTER_API_KEY` | ✅ | OpenRouter API key (used by the `/demo` chatbot) |
 | `POSTGRES_URL` | ✅ | Same Neon/Postgres connection string as the `mcp` project |
 | `ADMIN_SECRET` | ✅ | Token for admin endpoints |
+| `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for signing admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app — chatbot connects here via MCP |
 | `MCP_API_KEY` | ❌ | Bearer token sent to the MCP endpoint (must match `apps/mcp` setting) |
+| `MCP_URL` | ❌ | Server-side MCP URL (overrides `NEXT_PUBLIC_MCP_URL`; useful for local dev where MCP runs on a different port) |
 | `CHAT_MODEL` | ❌ | OpenRouter model ID for the chatbot (default: `openai/gpt-4o-mini`) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 | `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
