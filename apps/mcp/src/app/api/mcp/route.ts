@@ -281,7 +281,7 @@ function createMcpServer(): McpServer {
   // Tool: semantic_search
   server.tool(
     'semantic_search',
-    'Find models by semantic similarity to a natural language description. Describe what you need (e.g. "fast cheap summarization model", "multimodal vision model for images") and get the most relevant matches. Requires OPENAI_API_KEY to be configured on the server.',
+    'Find models by semantic similarity to a natural language description. Describe what you need (e.g. "fast cheap summarization model", "multimodal vision model for images") and get the most relevant matches. Uses OPENROUTER_API_KEY to generate embeddings via openai/text-embedding-3-small on OpenRouter.',
     {
       query: z
         .string()
@@ -293,19 +293,19 @@ function createMcpServer(): McpServer {
     },
     async ({ query, limit, offset }) => {
       try {
-        const openaiKey = process.env['OPENAI_API_KEY'];
-        if (!openaiKey) {
+        const openrouterKey = process.env['OPENROUTER_API_KEY'];
+        if (!openrouterKey) {
           return {
             content: [
               {
                 type: 'text',
-                text: 'Semantic search is unavailable: OPENAI_API_KEY is not configured on this server.',
+                text: 'Semantic search is unavailable: OPENROUTER_API_KEY is not configured on this server.',
               },
             ],
             isError: true,
           };
         }
-        const embedding = await generateEmbedding(query, openaiKey);
+        const embedding = await generateEmbedding(query, openrouterKey);
         const models = await semanticSearchModels({ embedding, limit, offset });
         return {
           content: [

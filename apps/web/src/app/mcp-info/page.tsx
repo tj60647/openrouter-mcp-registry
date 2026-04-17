@@ -44,13 +44,18 @@ export default function McpInfoPage() {
             },
             {
               name: 'find_models_by_criteria',
-              description: 'Filter models by budget and context constraints',
-              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, limit?: number, offset?: number }',
+              description: 'Filter models by budget, context, and modality constraints',
+              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, modality?: string, limit?: number, offset?: number }',
             },
             {
               name: 'compare_models',
               description: 'Compare 2–5 models side-by-side on pricing, context length, and metadata',
               params: '{ ids: string[] }',
+            },
+            {
+              name: 'semantic_search',
+              description: 'Find models by semantic similarity to a natural language description. Powered by openai/text-embedding-3-small via OpenRouter.',
+              params: '{ query: string, limit?: number, offset?: number }',
             },
             {
               name: 'get_registry_status',
@@ -192,6 +197,24 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
               Search models by name or provider:
             </p>
             <pre><code>{`const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Find models by natural language description:
+            </p>
+            <pre><code>{`const results = await mcp.callTool('semantic_search', {
+  query: 'fast cheap summarization model with large context',
+  limit: 10,
+});`}</code></pre>
+          </div>
+          <div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              Filter models by modality (e.g. vision models):
+            </p>
+            <pre><code>{`const models = await mcp.callTool('find_models_by_criteria', {
+  modality: 'text+image',
+  limit: 20,
+});`}</code></pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>

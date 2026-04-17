@@ -32,9 +32,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     logger.info('Cron sync completed', { result });
 
     // Generate embeddings for any models that now have a description but no vector yet.
-    const openaiKey = process.env['OPENAI_API_KEY'];
-    if (result.success && openaiKey) {
-      const embeddingsGenerated = await generatePendingEmbeddings(openaiKey);
+    // Uses OPENROUTER_API_KEY (already required above) to call openai/text-embedding-3-small via OpenRouter.
+    if (result.success) {
+      const embeddingsGenerated = await generatePendingEmbeddings(apiKey);
       logger.info('Embeddings generated', { embeddingsGenerated });
       return NextResponse.json({ ...result, embeddingsGenerated });
     }

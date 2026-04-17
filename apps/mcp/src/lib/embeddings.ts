@@ -1,14 +1,17 @@
 import { db } from '@vercel/postgres';
 
-const EMBEDDING_MODEL = 'text-embedding-3-small';
+// Embeddings are generated via OpenRouter, which proxies OpenAI's embedding model.
+// This means only OPENROUTER_API_KEY is required — no separate OPENAI_API_KEY needed.
+const EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 const EMBEDDING_DIMENSIONS = 1536;
-const EMBEDDING_API_URL = 'https://api.openai.com/v1/embeddings';
+const EMBEDDING_API_URL = 'https://openrouter.ai/api/v1/embeddings';
 /** Max models to embed per call — keeps cron runs within their time budget. */
 const BATCH_SIZE = 50;
 
 /**
- * Generate an embedding vector for a single text string using OpenAI's
- * text-embedding-3-small model.
+ * Generate an embedding vector for a single text string using OpenRouter's
+ * openai/text-embedding-3-small model (proxied from OpenAI).
+ * Pass your OPENROUTER_API_KEY as the apiKey argument.
  */
 export async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
   const response = await fetch(EMBEDDING_API_URL, {
@@ -37,7 +40,7 @@ export async function generateEmbedding(text: string, apiKey: string): Promise<n
  * Find models that have a description but no embedding yet, generate embeddings
  * in a batch, and persist them.  Returns the number of embeddings generated.
  *
- * Safe to call even when OPENAI_API_KEY is absent — returns 0 immediately.
+ * Pass your OPENROUTER_API_KEY as the apiKey argument.
  */
 export async function generatePendingEmbeddings(apiKey: string): Promise<number> {
   const pending = await db.query<{ id: string; description: string }>(
