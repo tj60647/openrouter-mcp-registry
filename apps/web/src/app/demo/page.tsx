@@ -1,50 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useChat } from '@ai-sdk/react';
+import type { DynamicToolUIPart, TextUIPart } from 'ai';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface ApiMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-type AssistantBlock =
-  | { kind: 'reasoning'; content: string }
-  | { kind: 'tool_call'; id: string; name: string; done: boolean; error?: boolean }
-  | { kind: 'text'; content: string };
-
-interface UserMessage {
-  id: string;
-  role: 'user';
-  text: string;
-}
-
-interface AssistantMessage {
-  id: string;
-  role: 'assistant';
-  blocks: AssistantBlock[];
-}
-
-type Message = UserMessage | AssistantMessage;
 
 interface AgentConfig {
   model: string;
   systemPrompt: string;
   parameters: Record<string, unknown>;
 }
-
-// ── Stream event types ────────────────────────────────────────────────────────
-
-type StreamEvent =
-  | { type: 'model'; model: string }
-  | { type: 'reasoning_delta'; delta: string }
-  | { type: 'tool_call'; name: string; id: string }
-  | { type: 'tool_result'; id: string; name: string; content: string; error?: boolean }
-  | { type: 'text_delta'; delta: string }
-  | { type: 'done' }
-  | { type: 'error'; message: string };
 
 // ── Example prompts ───────────────────────────────────────────────────────────
 
@@ -55,10 +22,6 @@ const EXAMPLE_PROMPTS = [
   'What Anthropic models are in the registry?',
   'When was the registry last synced?',
 ];
-
-function uid() {
-  return Math.random().toString(36).slice(2);
-}
 
 // ── AgentModal ────────────────────────────────────────────────────────────────
 
@@ -286,14 +249,16 @@ function ReasoningBlock({ content }: { content: string }) {
 
 // ── ToolCallBlock ─────────────────────────────────────────────────────────────
 
-function ToolCallBlock({ block }: { block: Extract<AssistantBlock, { kind: 'tool_call' }> }) {
+function ToolCallBlock({ part }: { part: DynamicToolUIPart }) {
+  const isError = part.state === 'output-error';
+  const isDone = part.state === 'output-available' || part.state === 'output-error';
   return (
     <div
       style={{
         fontSize: '0.8rem',
         color: 'var(--text-muted)',
         background: 'rgba(99,102,241,0.07)',
-        border: `1px solid ${block.error ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.2)'}`,
+        border: `1px solid ${isError ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.2)'}`,
         borderRadius: 6,
         padding: '0.4rem 0.75rem',
         margin: '0.25rem 0',
@@ -304,16 +269,16 @@ function ToolCallBlock({ block }: { block: Extract<AssistantBlock, { kind: 'tool
     >
       <span
         style={{
-          color: block.error ? 'var(--error)' : block.done ? 'var(--success)' : 'var(--accent)',
+          color: isError ? 'var(--error)' : isDone ? 'var(--success)' : 'var(--accent)',
           fontSize: '0.9rem',
         }}
       >
-        {block.error ? '✗' : block.done ? '✓' : '⟳'}
+        {isError ? '✗' : isDone ? '✓' : '⟳'}
       </span>
       <span>
-        Tool: <code style={{ fontSize: '0.8rem' }}>{block.name}</code>
+        Tool: <code style={{ fontSize: '0.8rem' }}>{part.toolName}</code>
       </span>
-      {!block.done && (
+      {!isDone && (
         <span style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.6 }}>running…</span>
       )}
     </div>
@@ -323,192 +288,36 @@ function ToolCallBlock({ block }: { block: Extract<AssistantBlock, { kind: 'tool
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DemoPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [history, setHistory] = useState<ApiMessage[]>([]);
+  const { messages, sendMessage, status, error } = useChat();
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [model, setModel] = useState<string | null>(null);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const loading = status === 'submitted' || status === 'streaming';
 
   // Fetch agent config on mount
   useEffect(() => {
     fetch('/api/chat')
       .then((r) => r.json() as Promise<AgentConfig>)
-      .then((cfg) => {
-        setAgentConfig(cfg);
-        setModel(cfg.model);
-      })
+      .then((cfg) => setAgentConfig(cfg))
       .catch(() => {});
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  /** Update a specific assistant message's blocks in-place. */
-  const updateAssistantBlocks = useCallback(
-    (msgId: string, updater: (blocks: AssistantBlock[]) => AssistantBlock[]) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId && m.role === 'assistant'
-            ? { ...m, blocks: updater(m.blocks) }
-            : m
-        )
-      );
-    },
-    []
-  );
-
-  const sendMessage = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || loading) return;
-
-      const userMsg: UserMessage = { id: uid(), role: 'user', text: trimmed };
-      setMessages((prev) => [...prev, userMsg]);
-      setError(null);
-      setLoading(true);
-
-      const newHistory: ApiMessage[] = [...history, { role: 'user', content: trimmed }];
-
-      // Create an empty assistant message we'll fill in via streaming
-      const assistantId = uid();
-      const emptyAssistant: AssistantMessage = { id: assistantId, role: 'assistant', blocks: [] };
-      setMessages((prev) => [...prev, emptyAssistant]);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: newHistory }),
-        });
-
-        if (!res.ok || !res.body) {
-          const errData = (await res.json()) as { error?: string };
-          throw new Error(errData.error ?? `HTTP ${res.status}`);
-        }
-
-        // ── Parse SSE stream ──────────────────────────────────────────────────
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = '';
-        let finalText = '';
-
-        // Pending deltas are flushed together once per chunk to minimise renders
-        let pendingTextDelta = '';
-        let pendingReasoningDelta = '';
-
-        function flushDeltas() {
-          if (pendingTextDelta) {
-            const captured = pendingTextDelta;
-            pendingTextDelta = '';
-            updateAssistantBlocks(assistantId, (blocks) => {
-              const last = blocks[blocks.length - 1];
-              if (last?.kind === 'text') {
-                return [...blocks.slice(0, -1), { ...last, content: last.content + captured }];
-              }
-              return [...blocks, { kind: 'text', content: captured }];
-            });
-          }
-          if (pendingReasoningDelta) {
-            const captured = pendingReasoningDelta;
-            pendingReasoningDelta = '';
-            updateAssistantBlocks(assistantId, (blocks) => {
-              const last = blocks[blocks.length - 1];
-              if (last?.kind === 'reasoning') {
-                return [...blocks.slice(0, -1), { ...last, content: last.content + captured }];
-              }
-              return [...blocks, { kind: 'reasoning', content: captured }];
-            });
-          }
-        }
-
-        outer: while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buf += dec.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-
-            let evt: StreamEvent;
-            try {
-              evt = JSON.parse(raw) as StreamEvent;
-            } catch {
-              continue;
-            }
-
-            switch (evt.type) {
-              case 'model':
-                setModel(evt.model);
-                break;
-              case 'reasoning_delta':
-                pendingReasoningDelta += evt.delta;
-                break;
-              case 'tool_call':
-                flushDeltas();
-                updateAssistantBlocks(assistantId, (blocks) => [
-                  ...blocks,
-                  { kind: 'tool_call', id: evt.id, name: evt.name, done: false },
-                ]);
-                break;
-              case 'tool_result':
-                flushDeltas();
-                updateAssistantBlocks(assistantId, (blocks) =>
-                  blocks.map((b) =>
-                    b.kind === 'tool_call' && b.id === evt.id
-                      ? { ...b, done: true, error: evt.error }
-                      : b
-                  )
-                );
-                break;
-              case 'text_delta':
-                finalText += evt.delta;
-                pendingTextDelta += evt.delta;
-                break;
-              case 'error':
-                flushDeltas();
-                setError(evt.message);
-                break outer;
-              case 'done':
-                flushDeltas();
-                break outer;
-            }
-          }
-          // Flush any accumulated deltas after processing each network chunk
-          flushDeltas();
-        }
-
-        setHistory([...newHistory, { role: 'assistant', content: finalText }]);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Something went wrong');
-        // Remove the empty assistant message on error
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [history, loading, updateAssistantBlocks]
-  );
+  }, [messages, status]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text) return;
+    if (!text || loading) return;
+    void sendMessage({ text });
     setInput('');
-    void sendMessage(text);
   }
 
   function openAgentModal() {
     if (!agentConfig) {
-      // Fetch if not yet loaded
       fetch('/api/chat')
         .then((r) => r.json() as Promise<AgentConfig>)
         .then((cfg) => setAgentConfig(cfg))
@@ -529,13 +338,13 @@ export default function DemoPage() {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0, paddingTop: '0.35rem' }}>
-          {model && (
+          {agentConfig && (
             <span
               className="badge badge-info"
               style={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}
               title="Active model"
             >
-              {model}
+              {agentConfig.model}
             </span>
           )}
           <button
@@ -596,8 +405,8 @@ export default function DemoPage() {
           </div>
         )}
 
-        {messages.map((m) => (
-          <div key={m.id}>
+        {messages.map((message) => (
+          <div key={message.id}>
             {/* Role label */}
             <div
               style={{
@@ -605,14 +414,14 @@ export default function DemoPage() {
                 fontWeight: 600,
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
-                color: m.role === 'user' ? 'var(--accent)' : 'var(--text-muted)',
+                color: message.role === 'user' ? 'var(--accent)' : 'var(--text-muted)',
                 marginBottom: '0.3rem',
               }}
             >
-              {m.role === 'user' ? 'You' : 'Assistant'}
+              {message.role === 'user' ? 'You' : 'Assistant'}
             </div>
 
-            {m.role === 'user' ? (
+            {message.role === 'user' ? (
               <div
                 style={{
                   background: 'rgba(99,102,241,0.1)',
@@ -624,7 +433,9 @@ export default function DemoPage() {
                   fontSize: '0.95rem',
                 }}
               >
-                {m.text}
+                {(message.parts.filter((p) => p.type === 'text') as TextUIPart[])
+                  .map((p) => p.text)
+                  .join('')}
               </div>
             ) : (
               <div
@@ -637,18 +448,22 @@ export default function DemoPage() {
                   fontSize: '0.95rem',
                 }}
               >
-                {m.blocks.length === 0 && loading ? (
+                {!message.parts.some(
+                  (p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'dynamic-tool'
+                ) && loading ? (
                   <span style={{ color: 'var(--text-muted)' }}>Thinking…</span>
                 ) : (
-                  m.blocks.map((block, bi) => {
-                    if (block.kind === 'reasoning') {
-                      return <ReasoningBlock key={bi} content={block.content} />;
+                  message.parts.map((part, i) => {
+                    if (part.type === 'reasoning') {
+                      return <ReasoningBlock key={i} content={part.text} />;
                     }
-                    if (block.kind === 'tool_call') {
-                      return <ToolCallBlock key={bi} block={block} />;
+                    if (part.type === 'dynamic-tool') {
+                      return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
                     }
-                    // text block
-                    return <MarkdownRenderer key={bi} content={block.content} />;
+                    if (part.type === 'text') {
+                      return <MarkdownRenderer key={i} content={(part as TextUIPart).text} />;
+                    }
+                    return null;
                   })
                 )}
               </div>
@@ -656,7 +471,7 @@ export default function DemoPage() {
           </div>
         ))}
 
-        {error && <div className="error-msg">{error}</div>}
+        {error && <div className="error-msg">{error.message}</div>}
 
         <div ref={bottomRef} />
       </div>
