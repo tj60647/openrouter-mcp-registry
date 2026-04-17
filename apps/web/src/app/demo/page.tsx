@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import type { DynamicToolUIPart, TextUIPart } from 'ai';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
@@ -11,6 +11,7 @@ interface AgentConfig {
   model: string;
   systemPrompt: string;
   parameters: Record<string, unknown>;
+  availableModels: string[];
 }
 
 // ── Example prompts ───────────────────────────────────────────────────────────
@@ -23,13 +24,50 @@ const EXAMPLE_PROMPTS = [
   'When was the registry last synced?',
 ];
 
+// ── PulsingIndicator ─────────────────────────────────────────────────────────
+
+function PulsingIndicator() {
+  return (
+    <svg
+      width="36"
+      height="12"
+      viewBox="0 0 36 12"
+      aria-label="Loading agent configuration"
+      style={{ display: 'block' }}
+    >
+      {[6, 18, 30].map((cx, i) => (
+        <circle key={cx} cx={cx} cy={6} r={4} fill="var(--accent)">
+          <animate
+            attributeName="opacity"
+            values="0.2;1;0.2"
+            dur="1.2s"
+            begin={`${i * 0.3}s`}
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="r"
+            values="2.5;4;2.5"
+            dur="1.2s"
+            begin={`${i * 0.3}s`}
+            repeatCount="indefinite"
+          />
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
 // ── AgentModal ────────────────────────────────────────────────────────────────
 
 function AgentModal({
   config,
+  selectedModel,
+  onModelChange,
   onClose,
 }: {
   config: AgentConfig | null;
+  selectedModel: string | null;
+  onModelChange: (model: string) => void;
   onClose: () => void;
 }) {
   // Close on Escape
@@ -70,7 +108,7 @@ function AgentModal({
       >
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h2 style={{ marginBottom: 0 }}>Agent Configuration</h2>
+          <h2 style={{ marginBottom: 0 }}>Model Settings</h2>
           <button
             type="button"
             onClick={onClose}
@@ -89,10 +127,12 @@ function AgentModal({
         </div>
 
         {config === null ? (
-          <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 0' }}>
+            <PulsingIndicator />
+          </div>
         ) : (
           <>
-            {/* Model */}
+            {/* Model selector */}
             <div>
               <div
                 style={{
@@ -106,18 +146,34 @@ function AgentModal({
               >
                 Model
               </div>
-              <code
+              <select
+                value={selectedModel ?? config.model}
+                onChange={(e) => onModelChange(e.target.value)}
                 style={{
-                  background: 'rgba(99,102,241,0.12)',
-                  padding: '0.35rem 0.75rem',
+                  width: '100%',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text)',
                   borderRadius: 6,
+                  padding: '0.45rem 0.75rem',
                   fontSize: '0.9rem',
-                  display: 'inline-block',
-                  color: 'var(--accent)',
+                  fontFamily: 'var(--mono)',
                 }}
               >
-                {config.model}
-              </code>
+                {/* Ensure current selection is always shown even if not in the list */}
+                {[
+                  ...new Set([
+                    ...(selectedModel && !config.availableModels.includes(selectedModel as never)
+                      ? [selectedModel]
+                      : []),
+                    ...config.availableModels,
+                  ]),
+                ].map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* System instructions */}
@@ -288,11 +344,18 @@ function ToolCallBlock({ part }: { part: DynamicToolUIPart }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DemoPage() {
-  const { messages, sendMessage, status, error } = useChat();
+  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+
+  const { messages, sendMessage, status, error, stop } = useChat({
+    body: selectedModel ? { model: selectedModel } : {},
+  });
+
   const [input, setInput] = useState('');
   const [showAgentModal, setShowAgentModal] = useState(false);
-  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   const loading = status === 'submitted' || status === 'streaming';
 
@@ -300,13 +363,32 @@ export default function DemoPage() {
   useEffect(() => {
     fetch('/api/chat')
       .then(async (r) => (await r.json()) as AgentConfig)
-      .then((cfg) => setAgentConfig(cfg))
+      .then((cfg) => {
+        setAgentConfig(cfg);
+        setSelectedModel((prev) => prev ?? cfg.model);
+      })
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
+  // Track whether the chat container is scrolled to the bottom
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setIsAtBottom(distanceFromBottom < 50);
+  }, []);
+
+  function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, status]);
+    setIsAtBottom(true);
+  }
+
+  // Auto-scroll only when already at the bottom
+  useEffect(() => {
+    if (isAtBottom) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, status, isAtBottom]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -316,15 +398,7 @@ export default function DemoPage() {
     setInput('');
   }
 
-  function openAgentModal() {
-    if (!agentConfig) {
-      fetch('/api/chat')
-        .then(async (r) => (await r.json()) as AgentConfig)
-        .then((cfg) => setAgentConfig(cfg))
-        .catch(() => {});
-    }
-    setShowAgentModal(true);
-  }
+  const activeModel = selectedModel ?? agentConfig?.model;
 
   return (
     <div className="stack" style={{ height: 'calc(100vh - 8rem)', maxHeight: 900 }}>
@@ -338,18 +412,20 @@ export default function DemoPage() {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0, paddingTop: '0.35rem' }}>
-          {agentConfig && (
+          {activeModel ? (
             <span
               className="badge badge-info"
               style={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}
               title="Active model"
             >
-              {agentConfig.model}
+              {activeModel}
             </span>
+          ) : (
+            <PulsingIndicator />
           )}
           <button
             type="button"
-            onClick={openAgentModal}
+            onClick={() => setShowAgentModal(true)}
             style={{
               background: 'none',
               border: '1px solid var(--border)',
@@ -359,121 +435,154 @@ export default function DemoPage() {
               whiteSpace: 'nowrap',
             }}
           >
-            Agent Info
+            Model Settings
           </button>
         </div>
       </div>
 
-      {/* Chat window */}
-      <div
-        className="card"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1rem',
-          padding: '1.25rem',
-          minHeight: 0,
-        }}
-      >
-        {messages.length === 0 && !loading && (
-          <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <p style={{ marginBottom: '1.25rem', fontSize: '0.95rem' }}>Try one of these prompts:</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
-              {EXAMPLE_PROMPTS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => { setInput(p); }}
+      {/* Chat window wrapper — position:relative so the scroll button can be anchored */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="card"
+          style={{
+            height: '100%',
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            padding: '1.25rem',
+          }}
+        >
+          {messages.length === 0 && !loading && (
+            <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
+              <p style={{ marginBottom: '1.25rem', fontSize: '0.95rem' }}>Try one of these prompts:</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                {EXAMPLE_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => {
+                      void sendMessage({ text: p });
+                    }}
+                    style={{
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-muted)',
+                      borderRadius: 6,
+                      padding: '0.4rem 1rem',
+                      fontSize: '0.875rem',
+                      cursor: 'pointer',
+                      maxWidth: 420,
+                      width: '100%',
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((message) => (
+            <div key={message.id}>
+              {/* Role label */}
+              <div
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  color: message.role === 'user' ? 'var(--accent)' : 'var(--text-muted)',
+                  marginBottom: '0.3rem',
+                }}
+              >
+                {message.role === 'user' ? 'You' : 'Assistant'}
+              </div>
+
+              {message.role === 'user' ? (
+                <div
                   style={{
-                    background: 'var(--bg)',
+                    background: 'rgba(99,102,241,0.1)',
                     border: '1px solid var(--border)',
-                    color: 'var(--text-muted)',
-                    borderRadius: 6,
-                    padding: '0.4rem 1rem',
-                    fontSize: '0.875rem',
-                    cursor: 'pointer',
-                    maxWidth: 420,
-                    width: '100%',
+                    borderRadius: 8,
+                    padding: '0.75rem 1rem',
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.6,
+                    fontSize: '0.95rem',
                   }}
                 >
-                  {p}
-                </button>
-              ))}
+                  {(message.parts.filter((p) => p.type === 'text') as TextUIPart[])
+                    .map((p) => p.text)
+                    .join('')}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    background: 'var(--bg-hover)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '0.75rem 1rem',
+                    lineHeight: 1.6,
+                    fontSize: '0.95rem',
+                  }}
+                >
+                  {!message.parts.some(
+                    (p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'dynamic-tool'
+                  ) && loading ? (
+                    <span style={{ color: 'var(--text-muted)' }}>Thinking…</span>
+                  ) : (
+                    message.parts.map((part, i) => {
+                      if (part.type === 'reasoning') {
+                        return <ReasoningBlock key={i} content={part.text} />;
+                      }
+                      if (part.type === 'dynamic-tool') {
+                        return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
+                      }
+                      if (part.type === 'text') {
+                        return <MarkdownRenderer key={i} content={(part as TextUIPart).text} />;
+                      }
+                      return null;
+                    })
+                  )}
+                </div>
+              )}
             </div>
-          </div>
+          ))}
+
+          {error && <div className="error-msg">{error.message}</div>}
+
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Scroll-to-bottom button */}
+        {!isAtBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            aria-label="Scroll to bottom"
+            style={{
+              position: 'absolute',
+              bottom: '0.75rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 10,
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-muted)',
+              borderRadius: '9999px',
+              padding: '0.35rem 1rem',
+              fontSize: '0.8rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            }}
+          >
+            ↓ Scroll to bottom
+          </button>
         )}
-
-        {messages.map((message) => (
-          <div key={message.id}>
-            {/* Role label */}
-            <div
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: message.role === 'user' ? 'var(--accent)' : 'var(--text-muted)',
-                marginBottom: '0.3rem',
-              }}
-            >
-              {message.role === 'user' ? 'You' : 'Assistant'}
-            </div>
-
-            {message.role === 'user' ? (
-              <div
-                style={{
-                  background: 'rgba(99,102,241,0.1)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '0.75rem 1rem',
-                  whiteSpace: 'pre-wrap',
-                  lineHeight: 1.6,
-                  fontSize: '0.95rem',
-                }}
-              >
-                {(message.parts.filter((p) => p.type === 'text') as TextUIPart[])
-                  .map((p) => p.text)
-                  .join('')}
-              </div>
-            ) : (
-              <div
-                style={{
-                  background: 'var(--bg-hover)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '0.75rem 1rem',
-                  lineHeight: 1.6,
-                  fontSize: '0.95rem',
-                }}
-              >
-                {!message.parts.some(
-                  (p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'dynamic-tool'
-                ) && loading ? (
-                  <span style={{ color: 'var(--text-muted)' }}>Thinking…</span>
-                ) : (
-                  message.parts.map((part, i) => {
-                    if (part.type === 'reasoning') {
-                      return <ReasoningBlock key={i} content={part.text} />;
-                    }
-                    if (part.type === 'dynamic-tool') {
-                      return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
-                    }
-                    if (part.type === 'text') {
-                      return <MarkdownRenderer key={i} content={(part as TextUIPart).text} />;
-                    }
-                    return null;
-                  })
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-
-        {error && <div className="error-msg">{error.message}</div>}
-
-        <div ref={bottomRef} />
       </div>
 
       {/* Input form */}
@@ -497,18 +606,39 @@ export default function DemoPage() {
           }}
           style={{ resize: 'none', flex: 1 }}
         />
-        <button type="submit" disabled={loading || !input.trim()} style={{ flexShrink: 0 }}>
-          {loading ? 'Sending…' : 'Send'}
-        </button>
+        {loading ? (
+          <button
+            type="button"
+            onClick={stop}
+            style={{
+              flexShrink: 0,
+              background: 'rgba(239,68,68,0.12)',
+              border: '1px solid rgba(239,68,68,0.3)',
+              color: 'var(--error)',
+            }}
+          >
+            ■ Stop
+          </button>
+        ) : (
+          <button type="submit" disabled={!input.trim()} style={{ flexShrink: 0 }}>
+            Send
+          </button>
+        )}
       </form>
       <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '-0.5rem' }}>
         Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for a new line
       </p>
 
-      {/* Agent Info modal */}
+      {/* Model Settings modal */}
       {showAgentModal && (
-        <AgentModal config={agentConfig} onClose={() => setShowAgentModal(false)} />
+        <AgentModal
+          config={agentConfig}
+          selectedModel={selectedModel}
+          onModelChange={setSelectedModel}
+          onClose={() => setShowAgentModal(false)}
+        />
       )}
     </div>
   );
 }
+

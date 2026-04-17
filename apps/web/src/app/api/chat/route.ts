@@ -22,6 +22,18 @@ const AGENT_PARAMETERS = {
   stream: true,
 } as const;
 
+const AVAILABLE_MODELS = [
+  'openai/gpt-4o-mini',
+  'openai/gpt-4o',
+  'openai/o4-mini',
+  'anthropic/claude-sonnet-4-5',
+  'anthropic/claude-3-5-haiku',
+  'google/gemini-2.0-flash-001',
+  'google/gemini-2.5-pro-preview-03-25',
+  'meta-llama/llama-3.3-70b-instruct',
+  'deepseek/deepseek-chat-v3-0324',
+] as const;
+
 // ── MCP helpers ───────────────────────────────────────────────────────────────
 
 /** Create and connect an MCP client to the registry server. */
@@ -51,6 +63,7 @@ export async function GET(): Promise<Response> {
     model: CHAT_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     parameters: AGENT_PARAMETERS,
+    availableModels: AVAILABLE_MODELS,
   });
 }
 
@@ -68,7 +81,15 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
 
-  const { messages } = (await req.json()) as { messages: UIMessage[] };
+  let parsedBody: { messages: UIMessage[]; model?: string };
+  try {
+    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string };
+  } catch {
+    return Response.json({ error: 'Invalid request body.' }, { status: 400 });
+  }
+
+  const { messages, model: requestedModel } = parsedBody;
+  const chatModel = requestedModel ?? CHAT_MODEL;
 
   const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
     console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
@@ -112,7 +133,7 @@ export async function POST(req: Request): Promise<Response> {
     });
 
     const result = streamText({
-      model: openrouter(CHAT_MODEL),
+      model: openrouter(chatModel),
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
       tools,
