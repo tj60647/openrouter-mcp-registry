@@ -32,11 +32,14 @@ interface AgentConfig {
 // ── Example prompts ───────────────────────────────────────────────────────────
 
 const EXAMPLE_PROMPTS = [
-  'What are the cheapest models available?',
-  'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o',
-  'Find models with at least 128k context window',
-  'What Anthropic models are in the registry?',
-  'When was the registry last synced?',
+  { label: 'Does openai/gpt-4o-mini exist?', text: 'Does the model openai/gpt-4o-mini exist in the registry?' },
+  { label: 'Latest Claude Sonnet?', text: 'What is the most recent version of Claude Sonnet available?' },
+  { label: 'Latest GPT-4 model?', text: 'What is the most recent GPT-4 model available in the registry?' },
+  { label: 'Latest Gemini model?', text: 'What is the most recent Gemini model available?' },
+  { label: 'Cheapest models', text: 'What are the cheapest models available?' },
+  { label: '128k context models', text: 'Find models with at least 128k context window' },
+  { label: 'Compare Claude vs GPT-4o', text: 'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o' },
+  { label: 'Registry status', text: 'When was the registry last synced?' },
 ];
 
 // ── PulsingIndicator ──────────────────────────────────────────────────────────
@@ -601,7 +604,7 @@ function ToolCallBlock({ part }: { part: DynamicToolUIPart }) {
 export default function DemoPage() {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [temperature, setTemperature] = useState(1.0);
+  const [temperature, setTemperature] = useState(0);
   const [maxOutputTokens, setMaxOutputTokens] = useState<number | undefined>(undefined);
   const [showPanel, setShowPanel] = useState(true);
 
@@ -653,6 +656,9 @@ export default function DemoPage() {
   }
 
   const activeModel = selectedModel ?? agentConfig?.model;
+
+  /** Short display label for the active model, e.g. "gpt-4o-mini" */
+  const modelLabel = activeModel ? activeModel.split('/').pop() ?? activeModel : 'Assistant';
 
   return (
     <div className="stack" style={{ height: 'calc(100vh - 8rem)', maxHeight: 900 }}>
@@ -736,112 +742,99 @@ export default function DemoPage() {
             >
               {messages.length === 0 && !loading && (
                 <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <p style={{ marginBottom: '1.25rem', fontSize: '0.95rem' }}>
-                    Try one of these prompts:
+                  <p style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+                    Ask me about models in the registry ↓
                   </p>
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.5rem',
-                      alignItems: 'center',
-                    }}
-                  >
-                    {EXAMPLE_PROMPTS.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => {
-                          void sendMessage({ text: p }, { body: chatBody });
-                        }}
-                        style={{
-                          background: 'var(--bg)',
-                          border: '1px solid var(--border)',
-                          color: 'var(--text-muted)',
-                          borderRadius: 6,
-                          padding: '0.4rem 1rem',
-                          fontSize: '0.875rem',
-                          cursor: 'pointer',
-                          maxWidth: 420,
-                          width: '100%',
-                        }}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
                 </div>
               )}
 
-              {messages.map((message) => (
-                <div key={message.id}>
+              {messages.map((message) => {
+                const isUser = message.role === 'user';
+                return (
                   <div
+                    key={message.id}
                     style={{
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      color: message.role === 'user' ? 'var(--accent)' : 'var(--text-muted)',
-                      marginBottom: '0.3rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: isUser ? 'flex-end' : 'flex-start',
                     }}
                   >
-                    {message.role === 'user' ? 'You' : 'Assistant'}
-                  </div>
+                    {/* Role label */}
+                    <div
+                      style={{
+                        fontSize: '0.7rem',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        color: isUser ? 'var(--accent)' : 'var(--text-muted)',
+                        marginBottom: '0.25rem',
+                        paddingLeft: isUser ? 0 : '0.25rem',
+                        paddingRight: isUser ? '0.25rem' : 0,
+                      }}
+                    >
+                      {isUser ? 'You' : modelLabel}
+                    </div>
 
-                  {message.role === 'user' ? (
-                    <div
-                      style={{
-                        background: 'rgba(99,102,241,0.1)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        padding: '0.75rem 1rem',
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: 1.6,
-                        fontSize: '0.95rem',
-                      }}
-                    >
-                      {(message.parts.filter((p) => p.type === 'text') as TextUIPart[])
-                        .map((p) => p.text)
-                        .join('')}
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        background: 'var(--bg-hover)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        padding: '0.75rem 1rem',
-                        lineHeight: 1.6,
-                        fontSize: '0.95rem',
-                      }}
-                    >
-                      {!message.parts.some(
-                        (p) =>
-                          p.type === 'text' || p.type === 'reasoning' || p.type === 'dynamic-tool'
-                      ) && loading ? (
-                        <div style={{ padding: '0.25rem 0' }}>
-                          <PulsingIndicator label="Thinking" />
-                        </div>
-                      ) : (
-                        message.parts.map((part, i) => {
-                          if (part.type === 'reasoning') {
-                            return <ReasoningBlock key={i} content={part.text} />;
-                          }
-                          if (part.type === 'dynamic-tool') {
-                            return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
-                          }
-                          if (part.type === 'text') {
-                            return (
-                              <MarkdownRenderer key={i} content={(part as TextUIPart).text} />
-                            );
-                          }
-                          return null;
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {isUser ? (
+                      <div
+                        style={{
+                          background: 'rgba(99,102,241,0.15)',
+                          border: '1px solid rgba(99,102,241,0.3)',
+                          borderRadius: '12px 12px 2px 12px',
+                          padding: '0.6rem 0.9rem',
+                          whiteSpace: 'pre-wrap',
+                          lineHeight: 1.6,
+                          fontSize: '0.925rem',
+                          maxWidth: '80%',
+                        }}
+                      >
+                        {(message.parts.filter((p) => p.type === 'text') as TextUIPart[])
+                          .map((p) => p.text)
+                          .join('')}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          background: 'var(--bg-hover)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '12px 12px 12px 2px',
+                          padding: '0.75rem 1rem',
+                          lineHeight: 1.6,
+                          fontSize: '0.925rem',
+                          maxWidth: '90%',
+                          minWidth: 0,
+                        }}
+                      >
+                        {!message.parts.some(
+                          (p) =>
+                            p.type === 'text' ||
+                            p.type === 'reasoning' ||
+                            p.type === 'dynamic-tool'
+                        ) && loading ? (
+                          <div style={{ padding: '0.25rem 0' }}>
+                            <PulsingIndicator label="Thinking" />
+                          </div>
+                        ) : (
+                          message.parts.map((part, i) => {
+                            if (part.type === 'reasoning') {
+                              return <ReasoningBlock key={i} content={part.text} />;
+                            }
+                            if (part.type === 'dynamic-tool') {
+                              return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
+                            }
+                            if (part.type === 'text') {
+                              return (
+                                <MarkdownRenderer key={i} content={(part as TextUIPart).text} />
+                              );
+                            }
+                            return null;
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               {error && <div className="error-msg">{error.message}</div>}
 
@@ -921,6 +914,42 @@ export default function DemoPage() {
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '-0.25rem' }}>
             Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for a new line
           </p>
+
+          {/* Persistent example prompt chips */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.4rem',
+              overflowX: 'auto',
+              paddingBottom: '0.15rem',
+              flexWrap: 'nowrap',
+            }}
+          >
+            {EXAMPLE_PROMPTS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                disabled={loading}
+                onClick={() => {
+                  void sendMessage({ text: p.text }, { body: chatBody });
+                }}
+                style={{
+                  flexShrink: 0,
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-muted)',
+                  borderRadius: 20,
+                  padding: '0.3rem 0.75rem',
+                  fontSize: '0.78rem',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap',
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Agent panel (sidebar) */}
