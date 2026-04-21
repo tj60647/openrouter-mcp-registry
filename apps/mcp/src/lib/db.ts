@@ -159,6 +159,18 @@ export async function semanticSearchModels(opts: {
   return result.rows.map(rowToModel);
 }
 
+export async function getToolCapableModels(limit = 20): Promise<Model[]> {
+  const result = await db.query<ModelRow>(
+    `SELECT * FROM models
+     WHERE 'tools' = ANY(supported_parameters)
+       AND modality ILIKE '%text%'
+     ORDER BY created_at DESC NULLS LAST
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows.map(rowToModel);
+}
+
 export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
@@ -166,51 +178,58 @@ export function createModelRepository(): ModelRepository {
       const providers = Array.from(new Set(models.map((m) => m.provider).filter(Boolean)));
 
       // Uses individual upserts within a transaction to maintain atomicity.
-      // Each upsert uses parameterized queries via the sql tag to prevent injection.
+      // client.query with positional parameters is required here because the @vercel/postgres
+      // sql tagged template does not support JavaScript arrays (e.g. string[]) as bind
+      // parameters — it would serialize them as strings rather than Postgres array literals.
+      // Using client.query lets the pg driver handle proper TEXT[] array binding for
+      // supported_parameters.
       const client = await db.connect();
       try {
         await client.sql`BEGIN`;
         for (const model of models) {
-        await client.sql`
-            INSERT INTO models (
-              id, provider, display_name, description, modality,
-              context_length, max_completion_tokens,
-              input_price_per_1k, output_price_per_1k, image_price_per_1k,
-              created_at, metadata, fetched_at
-            )
-            VALUES (
-              ${model.id},
-              ${model.provider},
-              ${model.displayName},
-              ${model.description},
-              ${model.modality},
-              ${model.contextLength},
-              ${model.maxCompletionTokens},
-              ${model.inputPricePer1k},
-              ${model.outputPricePer1k},
-              ${model.imagePricePer1k},
-              ${model.createdAt?.toISOString() ?? null},
-              ${JSON.stringify(model.metadata)},
-              ${model.fetchedAt.toISOString()}
-            )
-            ON CONFLICT (id) DO UPDATE SET
-              provider = EXCLUDED.provider,
-              display_name = EXCLUDED.display_name,
-              description = EXCLUDED.description,
-              modality = EXCLUDED.modality,
-              context_length = EXCLUDED.context_length,
-              max_completion_tokens = EXCLUDED.max_completion_tokens,
-              input_price_per_1k = EXCLUDED.input_price_per_1k,
-              output_price_per_1k = EXCLUDED.output_price_per_1k,
-              image_price_per_1k = EXCLUDED.image_price_per_1k,
-              created_at = EXCLUDED.created_at,
-              metadata = EXCLUDED.metadata,
-              fetched_at = EXCLUDED.fetched_at,
-              description_embedding = CASE
-                WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
-                ELSE models.description_embedding
-              END
-          `;
+          await client.query(
+            `INSERT INTO models (
+               id, provider, display_name, description, modality,
+               context_length, max_completion_tokens,
+               input_price_per_1k, output_price_per_1k, image_price_per_1k,
+               created_at, supported_parameters, metadata, fetched_at
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             ON CONFLICT (id) DO UPDATE SET
+               provider = EXCLUDED.provider,
+               display_name = EXCLUDED.display_name,
+               description = EXCLUDED.description,
+               modality = EXCLUDED.modality,
+               context_length = EXCLUDED.context_length,
+               max_completion_tokens = EXCLUDED.max_completion_tokens,
+               input_price_per_1k = EXCLUDED.input_price_per_1k,
+               output_price_per_1k = EXCLUDED.output_price_per_1k,
+               image_price_per_1k = EXCLUDED.image_price_per_1k,
+               created_at = EXCLUDED.created_at,
+               supported_parameters = EXCLUDED.supported_parameters,
+               metadata = EXCLUDED.metadata,
+               fetched_at = EXCLUDED.fetched_at,
+               description_embedding = CASE
+                 WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                 ELSE models.description_embedding
+               END`,
+            [
+              model.id,
+              model.provider,
+              model.displayName,
+              model.description,
+              model.modality,
+              model.contextLength,
+              model.maxCompletionTokens,
+              model.inputPricePer1k,
+              model.outputPricePer1k,
+              model.imagePricePer1k,
+              model.createdAt?.toISOString() ?? null,
+              model.supportedParameters,
+              JSON.stringify(model.metadata),
+              model.fetchedAt.toISOString(),
+            ]
+          );
         }
 
         for (const provider of providers) {

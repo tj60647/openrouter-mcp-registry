@@ -60,6 +60,10 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
   const createdTimestamp =
     typeof raw['created'] === 'number' ? raw['created'] : undefined;
 
+  const supportedParameters = Array.isArray(raw['supported_parameters'])
+    ? (raw['supported_parameters'] as unknown[]).filter((s): s is string => typeof s === 'string')
+    : undefined;
+
   // Remove fields we've explicitly mapped; keep the rest as metadata
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const {
@@ -71,6 +75,7 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
     architecture: _arch,
     top_provider: _tp,
     created: _cr,
+    supported_parameters: _sp,
     ...rest
   } = raw;
 
@@ -83,6 +88,7 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
     modality,
     maxCompletionTokens,
     createdTimestamp,
+    supportedParameters,
     ...rest,
   };
 }

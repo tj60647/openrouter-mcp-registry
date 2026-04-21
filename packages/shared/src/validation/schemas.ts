@@ -19,4 +19,16 @@ export const PaginationSchema = z.object({
   offset: z.coerce.number().int().min(0).optional().default(0),
   provider: z.string().optional(),
   query: z.string().max(256).optional(),
+  sortBy: z
+    .enum(['id', 'newest', 'context', 'input_price', 'output_price'])
+    .optional()
+    .default('id'),
+  toolsOnly: z
+    .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
+    .optional()
+    .default(false),
+  reasoningOnly: z
+    .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
+    .optional()
+    .default(false),
 });

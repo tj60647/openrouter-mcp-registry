@@ -11,6 +11,8 @@ export interface Model {
   imagePricePer1k: number | null;
   /** When the model was published on OpenRouter (from provider data) */
   createdAt: Date | null;
+  /** Parameters supported by the model (e.g. 'tools', 'temperature'). */
+  supportedParameters: string[];
   metadata: Record<string, unknown>;
   fetchedAt: Date;
 }
@@ -27,6 +29,7 @@ export interface ModelRow {
   output_price_per_1k: number | string | null;
   image_price_per_1k: number | string | null;
   created_at: Date | string | null;
+  supported_parameters: string[] | null;
   metadata: Record<string, unknown>;
   fetched_at: Date | string;
 }
@@ -50,6 +53,7 @@ export function rowToModel(row: ModelRow): Model {
     outputPricePer1k: toNullableNumber(row.output_price_per_1k),
     imagePricePer1k: toNullableNumber(row.image_price_per_1k),
     createdAt: row.created_at != null ? new Date(row.created_at) : null,
+    supportedParameters: row.supported_parameters ?? [],
     metadata: row.metadata,
     fetchedAt: new Date(row.fetched_at),
   };
