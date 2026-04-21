@@ -162,6 +162,9 @@ export async function semanticSearchModels(opts: {
 export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
+      const syncStartedAt = models[0]?.fetchedAt ?? new Date();
+      const providers = Array.from(new Set(models.map((m) => m.provider).filter(Boolean)));
+
       // Uses individual upserts within a transaction to maintain atomicity.
       // Each upsert uses parameterized queries via the sql tag to prevent injection.
       const client = await db.connect();
@@ -209,6 +212,19 @@ export function createModelRepository(): ModelRepository {
               END
           `;
         }
+
+        for (const provider of providers) {
+          await client.sql`
+            UPDATE models
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+              '_stale', true,
+              '_staleAt', NOW()
+            )
+            WHERE provider = ${provider}::text
+              AND fetched_at < ${syncStartedAt.toISOString()}::timestamptz
+          `;
+        }
+
         await client.sql`COMMIT`;
       } catch (err) {
         await client.sql`ROLLBACK`;
