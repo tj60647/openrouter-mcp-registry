@@ -15,7 +15,7 @@ const SYSTEM_PROMPT =
   `You help users explore, search, and compare AI models available through OpenRouter. ` +
   `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
 
-const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'openai/gpt-4o-mini';
+const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'google/gemini-3-flash-preview';
 
 const AGENT_PARAMETERS = {
   tool_choice: 'auto',

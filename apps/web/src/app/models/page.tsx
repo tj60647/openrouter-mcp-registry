@@ -14,9 +14,104 @@ interface ProvidersResponse {
   providers: string[];
 }
 
+type SortBy = 'id' | 'newest' | 'context' | 'input_price' | 'output_price';
+
 function formatDate(date: Date | string | null): string {
   if (!date) return '—';
   return new Date(date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+const stickyTh: React.CSSProperties = {
+  position: 'sticky',
+  top: 0,
+  background: 'var(--bg-card)',
+  boxShadow: '0 1px 0 var(--border)',
+  zIndex: 1,
+};
+
+function SortableHeader({
+  column,
+  activeSortBy,
+  onClick,
+  children,
+  style,
+  title,
+}: {
+  column: SortBy;
+  activeSortBy: SortBy;
+  onClick: () => void;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  title?: string;
+}) {
+  const active = column === activeSortBy;
+  return (
+    <th
+      onClick={onClick}
+      title={title}
+      style={{
+        ...stickyTh,
+        cursor: 'pointer',
+        color: active ? 'var(--accent)' : undefined,
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+        ...style,
+      }}
+    >
+      {children}
+      <span style={{ marginLeft: '0.3rem', opacity: active ? 1 : 0.3, color: 'var(--accent)' }}>
+        {active ? '↓' : '⇅'}
+      </span>
+    </th>
+  );
+}
+
+function FilterHeader({
+  active,
+  onClick,
+  children,
+  title,
+  style,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  title?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <th
+      onClick={onClick}
+      title={title}
+      style={{
+        ...stickyTh,
+        cursor: 'pointer',
+        color: active ? 'var(--accent)' : undefined,
+        textAlign: 'center',
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+        ...style,
+      }}
+    >
+      {children}
+      {active && (
+        <span
+          style={{
+            marginLeft: '0.35rem',
+            background: 'var(--accent)',
+            color: '#fff',
+            fontSize: '0.65rem',
+            borderRadius: '9999px',
+            padding: '0.05rem 0.4rem',
+            fontWeight: 700,
+            verticalAlign: 'middle',
+          }}
+        >
+          ON
+        </span>
+      )}
+    </th>
+  );
 }
 
 export default function ModelsPage() {
@@ -27,7 +122,7 @@ export default function ModelsPage() {
   const [providers, setProviders] = useState<string[]>([]);
   const [modelQuery, setModelQuery] = useState('');
   const [debouncedModelQuery, setDebouncedModelQuery] = useState('');
-  const [sortBy, setSortBy] = useState('id');
+  const [sortBy, setSortBy] = useState<SortBy>('id');
   const [toolsOnly, setToolsOnly] = useState(false);
   const [reasoningOnly, setReasoningOnly] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -103,11 +198,11 @@ export default function ModelsPage() {
       <div>
         <h1>Models</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          All models cached from OpenRouter. Filter by provider, capabilities, and sort order.
+          All models cached from OpenRouter. Use the column headers to sort or filter by capability.
         </p>
       </div>
 
-      {/* Filter row 1: provider + search */}
+      {/* Filter bar: provider + search + actions */}
       <div className="row" style={{ flexWrap: 'wrap' }}>
         <select
           value={provider}
@@ -126,42 +221,6 @@ export default function ModelsPage() {
           onChange={(e) => { setModelQuery(e.target.value); setOffset(0); }}
           style={{ maxWidth: 300 }}
         />
-      </div>
-
-      {/* Filter row 2: sort + capability toggles */}
-      <div className="row" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-        <select
-          value={sortBy}
-          onChange={(e) => { setSortBy(e.target.value); setOffset(0); }}
-          style={{ maxWidth: 200 }}
-        >
-          <option value="id">Sort: Alphabetical</option>
-          <option value="newest">Sort: Newest First</option>
-          <option value="context">Sort: Largest Context</option>
-          <option value="input_price">Sort: Cheapest Input</option>
-          <option value="output_price">Sort: Cheapest Output</option>
-        </select>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-muted)', userSelect: 'none' }}>
-          <input
-            type="checkbox"
-            checked={toolsOnly}
-            onChange={(e) => { setToolsOnly(e.target.checked); setOffset(0); }}
-            style={{ width: 'auto', cursor: 'pointer', accentColor: 'var(--accent)' }}
-          />
-          Tool Use Only
-        </label>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-muted)', userSelect: 'none' }}>
-          <input
-            type="checkbox"
-            checked={reasoningOnly}
-            onChange={(e) => { setReasoningOnly(e.target.checked); setOffset(0); }}
-            style={{ width: 'auto', cursor: 'pointer', accentColor: 'var(--accent)' }}
-          />
-          Reasoning Only
-        </label>
-
         <button onClick={() => fetchModels(normalizedModelQuery)}>Refresh</button>
         <button disabled={!hasActiveFilters} onClick={clearFilters}>Clear Filters</button>
       </div>
@@ -179,41 +238,106 @@ export default function ModelsPage() {
             {normalizedModelQuery ? `${normalizedProvider ? ' and' : ' for'} matching "${normalizedModelQuery}"` : ''}
           </p>
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            {/* Scrollable table container — headers remain visible while rows scroll */}
             <div style={{ overflowX: 'auto' }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Model ID</th>
-                    <th>Provider</th>
-                    <th>Display Name</th>
-                    <th>Context</th>
-                    <th>Input $/1k</th>
-                    <th>Output $/1k</th>
-                    <th>Published</th>
-                    <th>Reasoning</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.models.map((m) => (
-                    <tr key={m.id}>
-                      <td><code style={{ fontSize: '0.8rem' }}>{m.id}</code></td>
-                      <td><span className="badge badge-info">{m.provider}</span></td>
-                      <td>{m.displayName}</td>
-                      <td>{m.contextLength ? `${Math.floor(m.contextLength / 1000)}k` : '—'}</td>
-                      <td>{m.inputPricePer1k != null ? `$${m.inputPricePer1k.toFixed(4)}` : '—'}</td>
-                      <td>{m.outputPricePer1k != null ? `$${m.outputPricePer1k.toFixed(4)}` : '—'}</td>
-                      <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                        {formatDate(m.createdAt)}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        {m.supportedParameters.includes('reasoning')
-                          ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>✓</span>
-                          : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                      </td>
+              <div style={{ maxHeight: 'calc(100vh - 340px)', minHeight: 200, overflowY: 'auto' }}>
+                <table style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+                  <thead>
+                    <tr>
+                      <SortableHeader
+                        column="id"
+                        activeSortBy={sortBy}
+                        onClick={() => { setSortBy('id'); setOffset(0); }}
+                        title="Sort alphabetically by model ID"
+                      >
+                        Model ID
+                      </SortableHeader>
+                      <th style={stickyTh}>Provider</th>
+                      <th style={stickyTh}>Display Name</th>
+                      <SortableHeader
+                        column="context"
+                        activeSortBy={sortBy}
+                        onClick={() => { setSortBy('context'); setOffset(0); }}
+                        title="Sort by largest context window"
+                        style={{ textAlign: 'right' }}
+                      >
+                        Context
+                      </SortableHeader>
+                      <SortableHeader
+                        column="input_price"
+                        activeSortBy={sortBy}
+                        onClick={() => { setSortBy('input_price'); setOffset(0); }}
+                        title="Sort by cheapest input price"
+                        style={{ textAlign: 'right' }}
+                      >
+                        Input $/1k
+                      </SortableHeader>
+                      <SortableHeader
+                        column="output_price"
+                        activeSortBy={sortBy}
+                        onClick={() => { setSortBy('output_price'); setOffset(0); }}
+                        title="Sort by cheapest output price"
+                        style={{ textAlign: 'right' }}
+                      >
+                        Output $/1k
+                      </SortableHeader>
+                      <SortableHeader
+                        column="newest"
+                        activeSortBy={sortBy}
+                        onClick={() => { setSortBy('newest'); setOffset(0); }}
+                        title="Sort by most recently published"
+                      >
+                        Published
+                      </SortableHeader>
+                      <FilterHeader
+                        active={toolsOnly}
+                        onClick={() => { setToolsOnly(!toolsOnly); setOffset(0); }}
+                        title={toolsOnly ? 'Showing tool-capable models only — click to show all' : 'Click to filter to tool-capable models only'}
+                      >
+                        Tools
+                      </FilterHeader>
+                      <FilterHeader
+                        active={reasoningOnly}
+                        onClick={() => { setReasoningOnly(!reasoningOnly); setOffset(0); }}
+                        title={reasoningOnly ? 'Showing reasoning models only — click to show all' : 'Click to filter to reasoning models only'}
+                      >
+                        Reasoning
+                      </FilterHeader>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {data.models.map((m) => (
+                      <tr key={m.id}>
+                        <td><code style={{ fontSize: '0.8rem' }}>{m.id}</code></td>
+                        <td><span className="badge badge-info">{m.provider}</span></td>
+                        <td>{m.displayName}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {m.contextLength ? `${Math.floor(m.contextLength / 1000)}k` : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {m.inputPricePer1k != null ? `$${m.inputPricePer1k.toFixed(4)}` : '—'}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {m.outputPricePer1k != null ? `$${m.outputPricePer1k.toFixed(4)}` : '—'}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                          {formatDate(m.createdAt)}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {m.supportedParameters.includes('tools')
+                            ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>✓</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {m.supportedParameters.includes('reasoning')
+                            ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>✓</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
