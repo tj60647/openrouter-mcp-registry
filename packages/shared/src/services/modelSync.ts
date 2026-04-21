@@ -56,6 +56,7 @@ export class ModelSyncService {
           modality: _mod,
           maxCompletionTokens: _mct,
           createdTimestamp: _ct,
+          supportedParameters: _sp,
           ...rest
         } = pm;
 
@@ -72,6 +73,7 @@ export class ModelSyncService {
             rawOutputPrice != null && !isNaN(rawOutputPrice) ? rawOutputPrice : null,
           imagePricePer1k: rawImagePrice != null && !isNaN(rawImagePrice) ? rawImagePrice : null,
           createdAt: pm.createdTimestamp != null ? new Date(pm.createdTimestamp * 1000) : null,
+          supportedParameters: pm.supportedParameters ?? [],
           metadata: rest as Record<string, unknown>,
           fetchedAt: now,
         };

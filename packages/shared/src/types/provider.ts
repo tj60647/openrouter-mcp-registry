@@ -5,6 +5,7 @@ export interface ProviderModel {
   description?: string;
   modality?: string;
   maxCompletionTokens?: number;
+  supportedParameters?: string[];
   /** Unix seconds — when the model was published on OpenRouter */
   createdTimestamp?: number;
   pricing?: {

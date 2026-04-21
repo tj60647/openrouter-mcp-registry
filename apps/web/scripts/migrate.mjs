@@ -65,6 +65,7 @@ async function migrate() {
       output_price_per_1k NUMERIC(18,10),
       image_price_per_1k NUMERIC(18,10),
       created_at TIMESTAMPTZ,
+      supported_parameters TEXT[],
       metadata JSONB NOT NULL DEFAULT '{}',
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       description_embedding vector(1536)
@@ -77,10 +78,17 @@ async function migrate() {
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS max_completion_tokens INTEGER`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS image_price_per_1k NUMERIC(18,10)`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS supported_parameters TEXT[]`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS description_embedding vector(1536)`;
 
   await sql`
     CREATE INDEX IF NOT EXISTS models_provider_idx ON models(provider)
+  `;
+
+  // GIN index for fast containment queries on supported_parameters (e.g. 'tools' = ANY(...))
+  await sql`
+    CREATE INDEX IF NOT EXISTS models_supported_params_gin_idx
+    ON models USING gin(supported_parameters)
   `;
 
   // HNSW index for fast cosine-similarity search on description embeddings

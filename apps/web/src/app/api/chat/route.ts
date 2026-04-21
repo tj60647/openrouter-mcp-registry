@@ -3,6 +3,7 @@ import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai'
 import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getToolCapableModels } from '../../../lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,17 +23,29 @@ const AGENT_PARAMETERS = {
   stream: true,
 } as const;
 
-const AVAILABLE_MODELS = [
+// Fallback list used when the DB is unreachable or has no tool-capable models yet.
+const FALLBACK_MODELS = [
   'openai/gpt-4o-mini',
   'openai/gpt-4o',
-  'openai/o4-mini',
-  'anthropic/claude-sonnet-4-5',
   'anthropic/claude-3-5-haiku',
   'google/gemini-2.0-flash-001',
-  'google/gemini-2.5-pro-preview-03-25',
   'meta-llama/llama-3.3-70b-instruct',
-  'deepseek/deepseek-chat-v3-0324',
 ] as const;
+
+/** Fetch the current list of tool-capable text models from the DB, sorted newest-first. */
+async function fetchAvailableModels(): Promise<string[]> {
+  try {
+    const models = await getToolCapableModels(20);
+    const ids = models.map((m) => m.id);
+    // Always include the configured default even if the DB doesn't have it yet.
+    if (!ids.includes(CHAT_MODEL)) ids.unshift(CHAT_MODEL);
+    return ids;
+  } catch {
+    const fallback = [...FALLBACK_MODELS] as string[];
+    if (!fallback.includes(CHAT_MODEL)) fallback.unshift(CHAT_MODEL);
+    return fallback;
+  }
+}
 
 // ── MCP helpers ───────────────────────────────────────────────────────────────
 
@@ -59,23 +72,25 @@ async function connectMcpClient(mcpUrl: string): Promise<Client> {
 // ── GET – agent config ────────────────────────────────────────────────────────
 
 export async function GET(): Promise<Response> {
-  // Try to list tools from the MCP server; fall back to empty array on any failure.
-  let mcpTools: Array<{ name: string; description: string }> = [];
-  const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
-  if (mcpUrl) {
-    const client = await connectMcpClient(mcpUrl).catch(() => null);
-    if (client) {
+  // Fetch tool-capable models and MCP tools concurrently.
+  const [availableModels, mcpTools] = await Promise.all([
+    fetchAvailableModels(),
+    (async (): Promise<Array<{ name: string; description: string }>> => {
+      const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+      if (!mcpUrl) return [];
+      const client = await connectMcpClient(mcpUrl).catch(() => null);
+      if (!client) return [];
       const listed = await client.listTools().catch(() => ({ tools: [] }));
-      mcpTools = listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
       await client.close().catch(() => {});
-    }
-  }
+      return listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
+    })(),
+  ]);
 
   return Response.json({
     model: CHAT_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     parameters: AGENT_PARAMETERS,
-    availableModels: AVAILABLE_MODELS,
+    availableModels,
     tools: mcpTools,
   });
 }

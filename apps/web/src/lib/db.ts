@@ -117,3 +117,14 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
   `;
   return result.rows[0] ? rowToSyncStatus(result.rows[0]) : null;
 }
+
+export async function getToolCapableModels(limit = 20): Promise<Model[]> {
+  const result = await sql<ModelRow>`
+    SELECT * FROM models
+    WHERE 'tools' = ANY(supported_parameters)
+      AND modality ILIKE '%text%'
+    ORDER BY created_at DESC NULLS LAST
+    LIMIT ${limit}
+  `;
+  return result.rows.map(rowToModel);
+}

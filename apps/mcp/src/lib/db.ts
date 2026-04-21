@@ -159,6 +159,18 @@ export async function semanticSearchModels(opts: {
   return result.rows.map(rowToModel);
 }
 
+export async function getToolCapableModels(limit = 20): Promise<Model[]> {
+  const result = await db.query<ModelRow>(
+    `SELECT * FROM models
+     WHERE 'tools' = ANY(supported_parameters)
+       AND modality ILIKE '%text%'
+     ORDER BY created_at DESC NULLS LAST
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows.map(rowToModel);
+}
+
 export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
@@ -173,7 +185,7 @@ export function createModelRepository(): ModelRepository {
               id, provider, display_name, description, modality,
               context_length, max_completion_tokens,
               input_price_per_1k, output_price_per_1k, image_price_per_1k,
-              created_at, metadata, fetched_at
+              created_at, supported_parameters, metadata, fetched_at
             )
             VALUES (
               ${model.id},
@@ -187,6 +199,7 @@ export function createModelRepository(): ModelRepository {
               ${model.outputPricePer1k},
               ${model.imagePricePer1k},
               ${model.createdAt?.toISOString() ?? null},
+              ${model.supportedParameters as unknown as string},
               ${JSON.stringify(model.metadata)},
               ${model.fetchedAt.toISOString()}
             )
@@ -201,6 +214,7 @@ export function createModelRepository(): ModelRepository {
               output_price_per_1k = EXCLUDED.output_price_per_1k,
               image_price_per_1k = EXCLUDED.image_price_per_1k,
               created_at = EXCLUDED.created_at,
+              supported_parameters = EXCLUDED.supported_parameters,
               metadata = EXCLUDED.metadata,
               fetched_at = EXCLUDED.fetched_at,
               description_embedding = CASE
