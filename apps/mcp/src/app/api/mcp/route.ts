@@ -10,6 +10,7 @@ import {
   getModels,
   getModelById,
   getSyncStatus,
+  getSyncHistory,
   findModelsByCriteria,
   semanticSearchModels,
 } from '../../../lib/db';
@@ -44,10 +45,15 @@ function createMcpServer(): McpServer {
         .optional()
         .default('id')
         .describe('Column to sort results by'),
+      availableOnly: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('When true, only return models that were present in the most recent OpenRouter sync'),
     },
-    async ({ limit, offset, provider, query, sortBy }) => {
+    async ({ limit, offset, provider, query, sortBy, availableOnly }) => {
       try {
-        const models = await getModels({ limit, offset, provider, query, sortBy });
+        const models = await getModels({ limit, offset, provider, query, sortBy, availableOnly });
         return {
           content: [
             {
@@ -345,6 +351,38 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // Tool: get_sync_history
+  server.tool(
+    'get_sync_history',
+    'Get the history of sync attempts (most recent first). Each entry records whether the sync succeeded, how many models were synced, and any error message.',
+    {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .default(50)
+        .describe('Maximum number of history entries to return'),
+    },
+    async ({ limit }) => {
+      try {
+        const history = await getSyncHistory(limit);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ history, count: history.length }, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+      }
+    }
+  );
+
   // ── Resources ─────────────────────────────────────────────────────────────
 
   // Resource: full model list
@@ -547,6 +585,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       'compare_models',
       'semantic_search',
       'get_registry_status',
+      'get_sync_history',
     ],
     resources: [
       'registry://models',

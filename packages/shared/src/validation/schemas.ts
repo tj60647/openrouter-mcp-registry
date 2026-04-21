@@ -31,4 +31,8 @@ export const PaginationSchema = z.object({
     .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
     .optional()
     .default(false),
+  availableOnly: z
+    .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
+    .optional()
+    .default(false),
 });

@@ -18,6 +18,7 @@ const fakeModel: Model = {
   supportedParameters: [],
   metadata: {},
   fetchedAt: new Date(),
+  isAvailable: true,
 };
 
 describe('ModelRegistry', () => {

@@ -76,6 +76,7 @@ export class ModelSyncService {
           supportedParameters: pm.supportedParameters ?? [],
           metadata: rest as Record<string, unknown>,
           fetchedAt: now,
+          isAvailable: true,
         };
       });
 

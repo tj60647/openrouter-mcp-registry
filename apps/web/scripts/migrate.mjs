@@ -68,7 +68,8 @@ async function migrate() {
       supported_parameters TEXT[],
       metadata JSONB NOT NULL DEFAULT '{}',
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      description_embedding vector(1536)
+      description_embedding vector(1536),
+      is_available BOOLEAN NOT NULL DEFAULT TRUE
     )
   `;
 
@@ -80,6 +81,7 @@ async function migrate() {
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS supported_parameters TEXT[]`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS description_embedding vector(1536)`;
+  await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT TRUE`;
 
   await sql`
     CREATE INDEX IF NOT EXISTS models_provider_idx ON models(provider)
@@ -97,6 +99,12 @@ async function migrate() {
     ON models USING hnsw (description_embedding vector_cosine_ops)
   `;
 
+  // Partial index for fast queries filtering on availability
+  await sql`
+    CREATE INDEX IF NOT EXISTS models_available_idx ON models(provider)
+    WHERE is_available = TRUE
+  `;
+
   await sql`
     CREATE TABLE IF NOT EXISTS sync_status (
       id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -110,6 +118,21 @@ async function migrate() {
   await sql`
     INSERT INTO sync_status (id, record_count) VALUES (1, 0)
     ON CONFLICT (id) DO NOTHING
+  `;
+
+  // Append-only sync history log — one row per sync attempt
+  await sql`
+    CREATE TABLE IF NOT EXISTS sync_history (
+      id BIGSERIAL PRIMARY KEY,
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      success BOOLEAN NOT NULL,
+      record_count INTEGER,
+      error TEXT
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS sync_history_synced_at_idx ON sync_history(synced_at DESC)
   `;
 
   console.log('Migrations complete.');

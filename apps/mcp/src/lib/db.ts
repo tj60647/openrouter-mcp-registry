@@ -1,6 +1,6 @@
 import { sql, db } from '@vercel/postgres';
-import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp/shared';
-import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
+import type { Model, ModelRow, SyncStatus, SyncStatusRow, SyncHistoryEntry, SyncHistoryRow } from '@openrouter-mcp/shared';
+import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-mcp/shared';
 import type { ModelRepository } from '@openrouter-mcp/shared';
 
 // Whitelist of allowed sort columns mapped to their SQL column names.
@@ -29,8 +29,9 @@ export async function getModels(opts: {
   provider?: string;
   query?: string;
   sortBy?: string;
+  availableOnly?: boolean;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy } = opts;
+  const { limit, offset, provider, query, sortBy, availableOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
   const orderCol = resolveOrderBy(sortBy);
 
@@ -46,6 +47,9 @@ export async function getModels(opts: {
     const n = params.length;
     conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
   }
+  if (availableOnly) {
+    conditions.push(`is_available = TRUE`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
@@ -58,32 +62,31 @@ export async function getModels(opts: {
 export async function getModelsCount(opts: {
   provider?: string;
   query?: string;
+  availableOnly?: boolean;
 }): Promise<number> {
-  const { provider, query } = opts;
+  const { provider, query, availableOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
-  let result;
 
-  if (provider && likeQuery) {
-    result = await sql<{ count: string }>`
-      SELECT COUNT(*)::text AS count FROM models
-      WHERE provider = ${provider}
-        AND (id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery})
-    `;
-  } else if (provider) {
-    result = await sql<{ count: string }>`
-      SELECT COUNT(*)::text AS count FROM models WHERE provider = ${provider}
-    `;
-  } else if (likeQuery) {
-    result = await sql<{ count: string }>`
-      SELECT COUNT(*)::text AS count FROM models
-      WHERE id ILIKE ${likeQuery} OR display_name ILIKE ${likeQuery} OR provider ILIKE ${likeQuery}
-    `;
-  } else {
-    result = await sql<{ count: string }>`
-      SELECT COUNT(*)::text AS count FROM models
-    `;
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (provider) {
+    params.push(provider);
+    conditions.push(`provider = $${params.length}`);
+  }
+  if (likeQuery) {
+    params.push(likeQuery, likeQuery, likeQuery);
+    const n = params.length;
+    conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
+  }
+  if (availableOnly) {
+    conditions.push(`is_available = TRUE`);
   }
 
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const queryStr = `SELECT COUNT(*)::text AS count FROM models ${where}`;
+
+  const result = await db.query<{ count: string }>(queryStr, params);
   return Number(result.rows[0]?.count ?? 0);
 }
 
@@ -100,6 +103,17 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
     SELECT * FROM sync_status ORDER BY id DESC LIMIT 1
   `;
   return result.rows[0] ? rowToSyncStatus(result.rows[0]) : null;
+}
+
+export async function getSyncHistory(limit = 50): Promise<SyncHistoryEntry[]> {
+  const result = await db.query<SyncHistoryRow>(
+    `SELECT id, synced_at, success, record_count, error
+     FROM sync_history
+     ORDER BY synced_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows.map(rowToSyncHistoryEntry);
 }
 
 export async function findModelsByCriteria(opts: {
@@ -192,9 +206,9 @@ export function createModelRepository(): ModelRepository {
                id, provider, display_name, description, modality,
                context_length, max_completion_tokens,
                input_price_per_1k, output_price_per_1k, image_price_per_1k,
-               created_at, supported_parameters, metadata, fetched_at
+               created_at, supported_parameters, metadata, fetched_at, is_available
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, TRUE)
              ON CONFLICT (id) DO UPDATE SET
                provider = EXCLUDED.provider,
                display_name = EXCLUDED.display_name,
@@ -209,6 +223,7 @@ export function createModelRepository(): ModelRepository {
                supported_parameters = EXCLUDED.supported_parameters,
                metadata = EXCLUDED.metadata,
                fetched_at = EXCLUDED.fetched_at,
+               is_available = TRUE,
                description_embedding = CASE
                  WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
                  ELSE models.description_embedding
@@ -232,13 +247,11 @@ export function createModelRepository(): ModelRepository {
           );
         }
 
+        // Mark models no longer returned by OpenRouter as unavailable
         for (const provider of providers) {
           await client.query(
             `UPDATE models
-             SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-               '_stale', true,
-               '_staleAt', NOW()
-             )
+             SET is_available = FALSE
              WHERE provider = $1::text
                AND fetched_at < $2::timestamptz`,
             [provider, syncStartedAt.toISOString()]
@@ -275,6 +288,12 @@ export function createModelRepository(): ModelRepository {
             last_error = EXCLUDED.last_error
         `;
       }
+      // Append an immutable record to the history log
+      await db.query(
+        `INSERT INTO sync_history (synced_at, success, record_count, error)
+         VALUES ($1, $2, $3, $4)`,
+        [now, success, success ? (count ?? 0) : null, error ?? null]
+      );
     },
 
     async acquireSyncLock(): Promise<boolean> {

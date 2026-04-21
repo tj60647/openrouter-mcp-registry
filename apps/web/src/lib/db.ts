@@ -1,6 +1,6 @@
 import { sql, db } from '@vercel/postgres';
-import type { Model, ModelRow, SyncStatus, SyncStatusRow, ModelRepository } from '@openrouter-mcp/shared';
-import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
+import type { Model, ModelRow, SyncStatus, SyncStatusRow, SyncHistoryEntry, SyncHistoryRow, ModelRepository } from '@openrouter-mcp/shared';
+import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-mcp/shared';
 
 // Whitelist mapping of safe sort-by names to their ORDER BY SQL fragments.
 const SORT_ORDER_MAP: Record<string, string> = {
@@ -52,8 +52,9 @@ export async function getModels(opts: {
   sortBy?: string;
   toolsOnly?: boolean;
   reasoningOnly?: boolean;
+  availableOnly?: boolean;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy, toolsOnly, reasoningOnly } = opts;
+  const { limit, offset, provider, query, sortBy, toolsOnly, reasoningOnly, availableOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
   const orderSql = SORT_ORDER_MAP[sortBy ?? ''] ?? 'id ASC';
 
@@ -75,6 +76,9 @@ export async function getModels(opts: {
   if (reasoningOnly) {
     conditions.push(`'reasoning' = ANY(supported_parameters)`);
   }
+  if (availableOnly) {
+    conditions.push(`is_available = TRUE`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
@@ -89,8 +93,9 @@ export async function getModelsCount(opts: {
   query?: string;
   toolsOnly?: boolean;
   reasoningOnly?: boolean;
+  availableOnly?: boolean;
 }): Promise<number> {
-  const { provider, query, toolsOnly, reasoningOnly } = opts;
+  const { provider, query, toolsOnly, reasoningOnly, availableOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
 
   const conditions: string[] = [];
@@ -110,6 +115,9 @@ export async function getModelsCount(opts: {
   }
   if (reasoningOnly) {
     conditions.push(`'reasoning' = ANY(supported_parameters)`);
+  }
+  if (availableOnly) {
+    conditions.push(`is_available = TRUE`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -133,6 +141,17 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
     SELECT * FROM sync_status ORDER BY id DESC LIMIT 1
   `;
   return result.rows[0] ? rowToSyncStatus(result.rows[0]) : null;
+}
+
+export async function getSyncHistory(limit = 50): Promise<SyncHistoryEntry[]> {
+  const result = await db.query<SyncHistoryRow>(
+    `SELECT id, synced_at, success, record_count, error
+     FROM sync_history
+     ORDER BY synced_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows.map(rowToSyncHistoryEntry);
 }
 
 export async function getToolCapableModels(limit = 20): Promise<Model[]> {
@@ -167,9 +186,9 @@ export function createModelRepository(): ModelRepository {
                id, provider, display_name, description, modality,
                context_length, max_completion_tokens,
                input_price_per_1k, output_price_per_1k, image_price_per_1k,
-               created_at, supported_parameters, metadata, fetched_at
+               created_at, supported_parameters, metadata, fetched_at, is_available
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, TRUE)
              ON CONFLICT (id) DO UPDATE SET
                provider = EXCLUDED.provider,
                display_name = EXCLUDED.display_name,
@@ -184,6 +203,7 @@ export function createModelRepository(): ModelRepository {
                supported_parameters = EXCLUDED.supported_parameters,
                metadata = EXCLUDED.metadata,
                fetched_at = EXCLUDED.fetched_at,
+               is_available = TRUE,
                description_embedding = CASE
                  WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
                  ELSE models.description_embedding
@@ -207,13 +227,11 @@ export function createModelRepository(): ModelRepository {
           );
         }
 
+        // Mark models no longer returned by OpenRouter as unavailable
         for (const provider of providers) {
           await client.query(
             `UPDATE models
-             SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-               '_stale', true,
-               '_staleAt', NOW()
-             )
+             SET is_available = FALSE
              WHERE provider = $1::text
                AND fetched_at < $2::timestamptz`,
             [provider, syncStartedAt.toISOString()]
@@ -250,6 +268,12 @@ export function createModelRepository(): ModelRepository {
             last_error = EXCLUDED.last_error
         `;
       }
+      // Append an immutable record to the history log
+      await db.query(
+        `INSERT INTO sync_history (synced_at, success, record_count, error)
+         VALUES ($1, $2, $3, $4)`,
+        [now, success, success ? (count ?? 0) : null, error ?? null]
+      );
     },
 
     async acquireSyncLock(): Promise<boolean> {
