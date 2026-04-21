@@ -15,6 +15,8 @@ export interface Model {
   supportedParameters: string[];
   metadata: Record<string, unknown>;
   fetchedAt: Date;
+  /** Whether the model was present in the most recent sync from OpenRouter. */
+  isAvailable: boolean;
 }
 
 export interface ModelRow {
@@ -32,6 +34,7 @@ export interface ModelRow {
   supported_parameters: string[] | null;
   metadata: Record<string, unknown>;
   fetched_at: Date | string;
+  is_available: boolean | null;
 }
 
 function toNullableNumber(value: number | string | null | undefined): number | null {
@@ -56,5 +59,6 @@ export function rowToModel(row: ModelRow): Model {
     supportedParameters: row.supported_parameters ?? [],
     metadata: row.metadata,
     fetchedAt: new Date(row.fetched_at),
+    isAvailable: row.is_available ?? true,
   };
 }
