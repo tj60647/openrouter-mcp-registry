@@ -70,7 +70,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`) |
+| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`) |
 | `GET` | `/api/models/:id` | Get model by canonical ID |
 | `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check + sync status summary |
@@ -89,7 +89,9 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/chat` | Agent config — default model, available models, and MCP tools list |
 | `POST` | `/api/chat` | Chatbot — LLM + tool calls routed through MCP |
-| `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
+| `POST` | `/api/admin/login` | Authenticate admin; issues session cookie (requires `ADMIN_SECRET`) |
+| `POST` | `/api/admin/logout` | Clear admin session cookie |
+| `POST` | `/api/admin/refresh` | Trigger manual sync (requires active admin session) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
 
 ## MCP Capabilities
@@ -260,7 +262,7 @@ You can either:
 | `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
 | `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
-| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `openai/gpt-4o-mini`) |
+| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `google/gemini-3-flash-preview`) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 
 `CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`).
@@ -453,10 +455,16 @@ CREATE TABLE models (
   output_price_per_1k   NUMERIC(18,10),
   image_price_per_1k    NUMERIC(18,10),          -- image input pricing
   created_at            TIMESTAMPTZ,             -- when the model was published on OpenRouter
+  supported_parameters  TEXT[],                  -- e.g. ["tools", "reasoning", "temperature"]
   metadata              JSONB NOT NULL DEFAULT '{}',
   fetched_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   description_embedding vector(1536)             -- auto-generated via OpenRouter embeddings
 );
+
+-- GIN index for fast containment queries on supported_parameters
+-- (e.g. WHERE 'tools' = ANY(supported_parameters))
+CREATE INDEX models_supported_params_gin_idx
+  ON models USING gin (supported_parameters);
 
 -- HNSW index for fast cosine-similarity search on description embeddings
 CREATE INDEX models_embedding_hnsw_idx
@@ -526,7 +534,7 @@ Tests cover:
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app — chatbot connects here via MCP |
 | `MCP_API_KEY` | ❌ | Bearer token sent to the MCP endpoint (must match `apps/mcp` setting) |
 | `MCP_URL` | ❌ | Server-side MCP URL (overrides `NEXT_PUBLIC_MCP_URL`; useful for local dev where MCP runs on a different port) |
-| `CHAT_MODEL` | ❌ | OpenRouter model ID for the chatbot (default: `openai/gpt-4o-mini`) |
+| `CHAT_MODEL` | ❌ | OpenRouter model ID for the chatbot (default: `google/gemini-3-flash-preview`) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 | `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
 

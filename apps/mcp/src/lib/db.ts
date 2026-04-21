@@ -185,7 +185,7 @@ export function createModelRepository(): ModelRepository {
       // supported_parameters.
       const client = await db.connect();
       try {
-        await client.sql`BEGIN`;
+        await client.query('BEGIN');
         for (const model of models) {
           await client.query(
             `INSERT INTO models (
@@ -233,20 +233,21 @@ export function createModelRepository(): ModelRepository {
         }
 
         for (const provider of providers) {
-          await client.sql`
-            UPDATE models
-            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-              '_stale', true,
-              '_staleAt', NOW()
-            )
-            WHERE provider = ${provider}::text
-              AND fetched_at < ${syncStartedAt.toISOString()}::timestamptz
-          `;
+          await client.query(
+            `UPDATE models
+             SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+               '_stale', true,
+               '_staleAt', NOW()
+             )
+             WHERE provider = $1::text
+               AND fetched_at < $2::timestamptz`,
+            [provider, syncStartedAt.toISOString()]
+          );
         }
 
-        await client.sql`COMMIT`;
+        await client.query('COMMIT');
       } catch (err) {
-        await client.sql`ROLLBACK`;
+        await client.query('ROLLBACK');
         throw err;
       } finally {
         client.release();

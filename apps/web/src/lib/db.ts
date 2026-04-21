@@ -1,5 +1,5 @@
 import { sql, db } from '@vercel/postgres';
-import type { Model, ModelRow, SyncStatus, SyncStatusRow } from '@openrouter-mcp/shared';
+import type { Model, ModelRow, SyncStatus, SyncStatusRow, ModelRepository } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus } from '@openrouter-mcp/shared';
 
 // Whitelist mapping of safe sort-by names to their ORDER BY SQL fragments.
@@ -144,4 +144,131 @@ export async function getToolCapableModels(limit = 20): Promise<Model[]> {
     LIMIT ${limit}
   `;
   return result.rows.map(rowToModel);
+}
+
+export function createModelRepository(): ModelRepository {
+  return {
+    async upsertModels(models: Model[]): Promise<void> {
+      const syncStartedAt = models[0]?.fetchedAt ?? new Date();
+      const providers = Array.from(new Set(models.map((m) => m.provider).filter(Boolean)));
+
+      // Uses individual upserts within a transaction to maintain atomicity.
+      // client.query with positional parameters is required here because the @vercel/postgres
+      // sql tagged template does not support JavaScript arrays (e.g. string[]) as bind
+      // parameters — it would serialize them as strings rather than Postgres array literals.
+      // Using client.query lets the pg driver handle proper TEXT[] array binding for
+      // supported_parameters.
+      const client = await db.connect();
+      try {
+        await client.query('BEGIN');
+        for (const model of models) {
+          await client.query(
+            `INSERT INTO models (
+               id, provider, display_name, description, modality,
+               context_length, max_completion_tokens,
+               input_price_per_1k, output_price_per_1k, image_price_per_1k,
+               created_at, supported_parameters, metadata, fetched_at
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             ON CONFLICT (id) DO UPDATE SET
+               provider = EXCLUDED.provider,
+               display_name = EXCLUDED.display_name,
+               description = EXCLUDED.description,
+               modality = EXCLUDED.modality,
+               context_length = EXCLUDED.context_length,
+               max_completion_tokens = EXCLUDED.max_completion_tokens,
+               input_price_per_1k = EXCLUDED.input_price_per_1k,
+               output_price_per_1k = EXCLUDED.output_price_per_1k,
+               image_price_per_1k = EXCLUDED.image_price_per_1k,
+               created_at = EXCLUDED.created_at,
+               supported_parameters = EXCLUDED.supported_parameters,
+               metadata = EXCLUDED.metadata,
+               fetched_at = EXCLUDED.fetched_at,
+               description_embedding = CASE
+                 WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                 ELSE models.description_embedding
+               END`,
+            [
+              model.id,
+              model.provider,
+              model.displayName,
+              model.description,
+              model.modality,
+              model.contextLength,
+              model.maxCompletionTokens,
+              model.inputPricePer1k,
+              model.outputPricePer1k,
+              model.imagePricePer1k,
+              model.createdAt?.toISOString() ?? null,
+              model.supportedParameters,
+              JSON.stringify(model.metadata),
+              model.fetchedAt.toISOString(),
+            ]
+          );
+        }
+
+        for (const provider of providers) {
+          await client.query(
+            `UPDATE models
+             SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+               '_stale', true,
+               '_staleAt', NOW()
+             )
+             WHERE provider = $1::text
+               AND fetched_at < $2::timestamptz`,
+            [provider, syncStartedAt.toISOString()]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+
+    async recordSyncAttempt(success: boolean, error?: string, count?: number): Promise<void> {
+      const now = new Date().toISOString();
+      if (success) {
+        await sql`
+          INSERT INTO sync_status (id, last_successful_sync, last_attempted_sync, last_error, record_count)
+          VALUES (1, ${now}, ${now}, NULL, ${count ?? 0})
+          ON CONFLICT (id) DO UPDATE SET
+            last_successful_sync = EXCLUDED.last_successful_sync,
+            last_attempted_sync = EXCLUDED.last_attempted_sync,
+            last_error = NULL,
+            record_count = EXCLUDED.record_count
+        `;
+      } else {
+        await sql`
+          INSERT INTO sync_status (id, last_attempted_sync, last_error, record_count)
+          VALUES (1, ${now}, ${error ?? null}, 0)
+          ON CONFLICT (id) DO UPDATE SET
+            last_attempted_sync = EXCLUDED.last_attempted_sync,
+            last_error = EXCLUDED.last_error
+        `;
+      }
+    },
+
+    async acquireSyncLock(): Promise<boolean> {
+      try {
+        const result = await sql<{ acquired: boolean }>`
+          SELECT pg_try_advisory_lock(12345678) as acquired
+        `;
+        return result.rows[0]?.acquired ?? false;
+      } catch {
+        return false;
+      }
+    },
+
+    async releaseSyncLock(): Promise<void> {
+      try {
+        await sql`SELECT pg_advisory_unlock(12345678)`;
+      } catch {
+        // best-effort
+      }
+    },
+  };
 }
