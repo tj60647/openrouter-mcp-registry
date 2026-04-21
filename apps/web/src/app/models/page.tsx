@@ -14,9 +14,9 @@ interface ProvidersResponse {
   providers: string[];
 }
 
-function formatDate(date: Date | null): string {
+function formatDate(date: Date | string | null): string {
   if (!date) return '—';
-  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  return new Date(date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 export default function ModelsPage() {
