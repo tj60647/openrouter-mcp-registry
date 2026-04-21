@@ -175,8 +175,11 @@ export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
       // Uses individual upserts within a transaction to maintain atomicity.
-      // The INSERT uses client.query with positional parameters so pg handles
-      // array serialization for supported_parameters safely without manual escaping.
+      // client.query with positional parameters is required here because the @vercel/postgres
+      // sql tagged template does not support JavaScript arrays (e.g. string[]) as bind
+      // parameters — it would serialize them as strings rather than Postgres array literals.
+      // Using client.query lets the pg driver handle proper TEXT[] array binding for
+      // supported_parameters.
       const client = await db.connect();
       try {
         await client.sql`BEGIN`;
