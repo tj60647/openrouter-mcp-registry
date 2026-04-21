@@ -175,53 +175,55 @@ export function createModelRepository(): ModelRepository {
   return {
     async upsertModels(models: Model[]): Promise<void> {
       // Uses individual upserts within a transaction to maintain atomicity.
-      // Each upsert uses parameterized queries via the sql tag to prevent injection.
+      // The INSERT uses client.query with positional parameters so pg handles
+      // array serialization for supported_parameters safely without manual escaping.
       const client = await db.connect();
       try {
         await client.sql`BEGIN`;
         for (const model of models) {
-        await client.sql`
-            INSERT INTO models (
-              id, provider, display_name, description, modality,
-              context_length, max_completion_tokens,
-              input_price_per_1k, output_price_per_1k, image_price_per_1k,
-              created_at, supported_parameters, metadata, fetched_at
-            )
-            VALUES (
-              ${model.id},
-              ${model.provider},
-              ${model.displayName},
-              ${model.description},
-              ${model.modality},
-              ${model.contextLength},
-              ${model.maxCompletionTokens},
-              ${model.inputPricePer1k},
-              ${model.outputPricePer1k},
-              ${model.imagePricePer1k},
-              ${model.createdAt?.toISOString() ?? null},
-              ${model.supportedParameters as unknown as string},
-              ${JSON.stringify(model.metadata)},
-              ${model.fetchedAt.toISOString()}
-            )
-            ON CONFLICT (id) DO UPDATE SET
-              provider = EXCLUDED.provider,
-              display_name = EXCLUDED.display_name,
-              description = EXCLUDED.description,
-              modality = EXCLUDED.modality,
-              context_length = EXCLUDED.context_length,
-              max_completion_tokens = EXCLUDED.max_completion_tokens,
-              input_price_per_1k = EXCLUDED.input_price_per_1k,
-              output_price_per_1k = EXCLUDED.output_price_per_1k,
-              image_price_per_1k = EXCLUDED.image_price_per_1k,
-              created_at = EXCLUDED.created_at,
-              supported_parameters = EXCLUDED.supported_parameters,
-              metadata = EXCLUDED.metadata,
-              fetched_at = EXCLUDED.fetched_at,
-              description_embedding = CASE
-                WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
-                ELSE models.description_embedding
-              END
-          `;
+          await client.query(
+            `INSERT INTO models (
+               id, provider, display_name, description, modality,
+               context_length, max_completion_tokens,
+               input_price_per_1k, output_price_per_1k, image_price_per_1k,
+               created_at, supported_parameters, metadata, fetched_at
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             ON CONFLICT (id) DO UPDATE SET
+               provider = EXCLUDED.provider,
+               display_name = EXCLUDED.display_name,
+               description = EXCLUDED.description,
+               modality = EXCLUDED.modality,
+               context_length = EXCLUDED.context_length,
+               max_completion_tokens = EXCLUDED.max_completion_tokens,
+               input_price_per_1k = EXCLUDED.input_price_per_1k,
+               output_price_per_1k = EXCLUDED.output_price_per_1k,
+               image_price_per_1k = EXCLUDED.image_price_per_1k,
+               created_at = EXCLUDED.created_at,
+               supported_parameters = EXCLUDED.supported_parameters,
+               metadata = EXCLUDED.metadata,
+               fetched_at = EXCLUDED.fetched_at,
+               description_embedding = CASE
+                 WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                 ELSE models.description_embedding
+               END`,
+            [
+              model.id,
+              model.provider,
+              model.displayName,
+              model.description,
+              model.modality,
+              model.contextLength,
+              model.maxCompletionTokens,
+              model.inputPricePer1k,
+              model.outputPricePer1k,
+              model.imagePricePer1k,
+              model.createdAt?.toISOString() ?? null,
+              model.supportedParameters,
+              JSON.stringify(model.metadata),
+              model.fetchedAt.toISOString(),
+            ]
+          );
         }
         await client.sql`COMMIT`;
       } catch (err) {
