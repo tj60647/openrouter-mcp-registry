@@ -15,6 +15,7 @@ interface ProvidersResponse {
 }
 
 type SortBy = 'id' | 'newest' | 'context' | 'input_price' | 'output_price';
+type Tab = 'active' | 'retired';
 
 function formatDate(date: Date | string | null): string {
   if (!date) return '—';
@@ -29,9 +30,19 @@ const stickyTh: React.CSSProperties = {
   zIndex: 1,
 };
 
+// Default sort direction per column (first click activates this direction)
+const DEFAULT_SORT_DIR: Record<SortBy, 'asc' | 'desc'> = {
+  id: 'asc',
+  newest: 'desc',
+  context: 'desc',
+  input_price: 'asc',
+  output_price: 'asc',
+};
+
 function SortableHeader({
   column,
   activeSortBy,
+  sortDir,
   onClick,
   children,
   style,
@@ -39,12 +50,14 @@ function SortableHeader({
 }: {
   column: SortBy;
   activeSortBy: SortBy;
+  sortDir: 'asc' | 'desc';
   onClick: () => void;
   children: React.ReactNode;
   style?: React.CSSProperties;
   title?: string;
 }) {
   const active = column === activeSortBy;
+  const icon = !active ? '⇅' : sortDir === 'asc' ? '↑' : '↓';
   return (
     <th
       onClick={onClick}
@@ -60,7 +73,7 @@ function SortableHeader({
     >
       {children}
       <span style={{ marginLeft: '0.3rem', opacity: active ? 1 : 0.3, color: 'var(--accent)' }}>
-        {active ? '↓' : '⇅'}
+        {icon}
       </span>
     </th>
   );
@@ -118,11 +131,13 @@ export default function ModelsPage() {
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<Tab>('active');
   const [provider, setProvider] = useState('');
   const [providers, setProviders] = useState<string[]>([]);
   const [modelQuery, setModelQuery] = useState('');
   const [debouncedModelQuery, setDebouncedModelQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('id');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [toolsOnly, setToolsOnly] = useState(false);
   const [reasoningOnly, setReasoningOnly] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -168,8 +183,11 @@ export default function ModelsPage() {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset), sortBy });
       if (normalizedProvider) params.set('provider', normalizedProvider);
       if (searchText) params.set('query', searchText);
+      params.set('sortDir', sortDir);
       if (toolsOnly) params.set('toolsOnly', 'true');
       if (reasoningOnly) params.set('reasoningOnly', 'true');
+      if (tab === 'active') params.set('availableOnly', 'true');
+      if (tab === 'retired') params.set('retiredOnly', 'true');
       const res = await fetch(`/api/models?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as ModelsResponse;
@@ -179,13 +197,34 @@ export default function ModelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedModelQuery, normalizedProvider, offset, sortBy, toolsOnly, reasoningOnly]);
+  }, [debouncedModelQuery, normalizedProvider, offset, sortBy, sortDir, toolsOnly, reasoningOnly, tab]);
+
+  // Tri-state sort: off → defaultDir → flippedDir → off (back to id/asc)
+  function handleSortClick(column: SortBy) {
+    if (sortBy !== column) {
+      // Activate this column with its natural default direction
+      setSortBy(column);
+      setSortDir(DEFAULT_SORT_DIR[column]);
+    } else {
+      const defaultDir = DEFAULT_SORT_DIR[column];
+      if (sortDir === defaultDir) {
+        // Second click: flip direction
+        setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+      } else {
+        // Third click: deactivate — back to default id sort
+        setSortBy('id');
+        setSortDir('asc');
+      }
+    }
+    setOffset(0);
+  }
 
   function clearFilters() {
     setProvider('');
     setModelQuery('');
     setDebouncedModelQuery('');
     setSortBy('id');
+    setSortDir('asc');
     setToolsOnly(false);
     setReasoningOnly(false);
     setOffset(0);
@@ -200,6 +239,28 @@ export default function ModelsPage() {
         <p style={{ color: 'var(--text-muted)' }}>
           All models cached from OpenRouter. Use the column headers to sort or filter by capability.
         </p>
+      </div>
+
+      {/* Active / Retired tabs */}
+      <div className="row" style={{ gap: '0.25rem' }}>
+        {(['active', 'retired'] as Tab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => { setTab(t); setOffset(0); }}
+            style={{
+              background: tab === t ? 'var(--accent)' : 'var(--bg-card)',
+              color: tab === t ? '#fff' : 'var(--text-muted)',
+              border: `1px solid ${tab === t ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 6,
+              padding: '0.35rem 1rem',
+              cursor: 'pointer',
+              fontWeight: tab === t ? 600 : 400,
+              textTransform: 'capitalize',
+            }}
+          >
+            {t}
+          </button>
+        ))}
       </div>
 
       {/* Filter bar: provider + search + actions */}
@@ -247,7 +308,8 @@ export default function ModelsPage() {
                       <SortableHeader
                         column="id"
                         activeSortBy={sortBy}
-                        onClick={() => { setSortBy('id'); setOffset(0); }}
+                        sortDir={sortDir}
+                        onClick={() => handleSortClick('id')}
                         title="Sort alphabetically by model ID"
                       >
                         Model ID
@@ -257,8 +319,9 @@ export default function ModelsPage() {
                       <SortableHeader
                         column="context"
                         activeSortBy={sortBy}
-                        onClick={() => { setSortBy('context'); setOffset(0); }}
-                        title="Sort by largest context window"
+                        sortDir={sortDir}
+                        onClick={() => handleSortClick('context')}
+                        title="Sort by context window size"
                         style={{ textAlign: 'right' }}
                       >
                         Context
@@ -266,8 +329,9 @@ export default function ModelsPage() {
                       <SortableHeader
                         column="input_price"
                         activeSortBy={sortBy}
-                        onClick={() => { setSortBy('input_price'); setOffset(0); }}
-                        title="Sort by cheapest input price"
+                        sortDir={sortDir}
+                        onClick={() => handleSortClick('input_price')}
+                        title="Sort by input price"
                         style={{ textAlign: 'right' }}
                       >
                         Input $/1k
@@ -275,8 +339,9 @@ export default function ModelsPage() {
                       <SortableHeader
                         column="output_price"
                         activeSortBy={sortBy}
-                        onClick={() => { setSortBy('output_price'); setOffset(0); }}
-                        title="Sort by cheapest output price"
+                        sortDir={sortDir}
+                        onClick={() => handleSortClick('output_price')}
+                        title="Sort by output price"
                         style={{ textAlign: 'right' }}
                       >
                         Output $/1k
@@ -284,8 +349,9 @@ export default function ModelsPage() {
                       <SortableHeader
                         column="newest"
                         activeSortBy={sortBy}
-                        onClick={() => { setSortBy('newest'); setOffset(0); }}
-                        title="Sort by most recently published"
+                        sortDir={sortDir}
+                        onClick={() => handleSortClick('newest')}
+                        title="Sort by publish date"
                       >
                         Published
                       </SortableHeader>

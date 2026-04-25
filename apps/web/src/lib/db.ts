@@ -2,14 +2,24 @@ import { sql, db } from '@vercel/postgres';
 import type { Model, ModelRow, SyncStatus, SyncStatusRow, SyncHistoryEntry, SyncHistoryRow, ModelRepository } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-mcp/shared';
 
-// Whitelist mapping of safe sort-by names to their ORDER BY SQL fragments.
-const SORT_ORDER_MAP: Record<string, string> = {
-  id: 'id ASC',
-  newest: 'created_at DESC NULLS LAST',
-  context: 'context_length DESC NULLS LAST',
-  input_price: 'input_price_per_1k ASC NULLS LAST',
-  output_price: 'output_price_per_1k ASC NULLS LAST',
+// Whitelist mapping of safe sort-by column names to their SQL column expressions.
+// Direction (ASC/DESC) and NULLS LAST are applied dynamically based on sortDir param.
+const SORT_COLUMN_MAP: Record<string, string> = {
+  id: 'id',
+  newest: 'created_at',
+  context: 'context_length',
+  input_price: 'input_price_per_1k',
+  output_price: 'output_price_per_1k',
 };
+// Columns that may contain NULLs and need NULLS LAST appended.
+const NULLABLE_SORT_COLUMNS = new Set(['newest', 'context', 'input_price', 'output_price']);
+
+function buildOrderSql(sortBy: string | undefined, sortDir: string | undefined): string {
+  const col = SORT_COLUMN_MAP[sortBy ?? 'id'] ?? 'id';
+  const dir = sortDir === 'desc' ? 'DESC' : 'ASC';
+  const nulls = NULLABLE_SORT_COLUMNS.has(sortBy ?? '') ? ' NULLS LAST' : '';
+  return `${col} ${dir}${nulls}`;
+}
 
 export async function getModelById(id: string): Promise<Model | null> {
   const result = await sql<ModelRow>`SELECT * FROM models WHERE id = ${id} LIMIT 1`;
@@ -50,13 +60,15 @@ export async function getModels(opts: {
   provider?: string;
   query?: string;
   sortBy?: string;
+  sortDir?: string;
   toolsOnly?: boolean;
   reasoningOnly?: boolean;
   availableOnly?: boolean;
+  retiredOnly?: boolean;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy, toolsOnly, reasoningOnly, availableOnly } = opts;
+  const { limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
-  const orderSql = SORT_ORDER_MAP[sortBy ?? ''] ?? 'id ASC';
+  const orderSql = buildOrderSql(sortBy, sortDir);
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -78,6 +90,9 @@ export async function getModels(opts: {
   }
   if (availableOnly) {
     conditions.push(`is_available = TRUE`);
+  }
+  if (retiredOnly) {
+    conditions.push(`is_available = FALSE`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -94,8 +109,9 @@ export async function getModelsCount(opts: {
   toolsOnly?: boolean;
   reasoningOnly?: boolean;
   availableOnly?: boolean;
+  retiredOnly?: boolean;
 }): Promise<number> {
-  const { provider, query, toolsOnly, reasoningOnly, availableOnly } = opts;
+  const { provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
 
   const conditions: string[] = [];
@@ -118,6 +134,9 @@ export async function getModelsCount(opts: {
   }
   if (availableOnly) {
     conditions.push(`is_available = TRUE`);
+  }
+  if (retiredOnly) {
+    conditions.push(`is_available = FALSE`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

@@ -12,9 +12,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
-    const { limit, offset, provider, query, sortBy, toolsOnly, reasoningOnly, availableOnly } = parsed.data;
-    const models = await getModels({ limit, offset, provider, query, sortBy, toolsOnly, reasoningOnly, availableOnly });
-    const count = await getModelsCount({ provider, query, toolsOnly, reasoningOnly, availableOnly });
+    const { limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = parsed.data;
+    const models = await getModels({ limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly });
+    const count = await getModelsCount({ provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly });
     return NextResponse.json({ models, count, limit, offset });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

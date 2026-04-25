@@ -23,6 +23,7 @@ export const PaginationSchema = z.object({
     .enum(['id', 'newest', 'context', 'input_price', 'output_price'])
     .optional()
     .default('id'),
+  sortDir: z.enum(['asc', 'desc']).optional().default('asc'),
   toolsOnly: z
     .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
     .optional()
@@ -32,6 +33,10 @@ export const PaginationSchema = z.object({
     .optional()
     .default(false),
   availableOnly: z
+    .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
+    .optional()
+    .default(false),
+  retiredOnly: z
     .preprocess((v: unknown) => v === 'true' || v === '1' || v === true, z.boolean())
     .optional()
     .default(false),
