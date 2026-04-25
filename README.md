@@ -70,7 +70,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`) |
+| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`) |
 | `GET` | `/api/models/:id` | Get model by canonical ID |
 | `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check + sync status summary |
@@ -83,7 +83,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/models` | List cached models |
+| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`, `?sortDir`, `?toolsOnly`, `?reasoningOnly`, `?availableOnly`, `?retiredOnly`) |
 | `GET` | `/api/providers` | List distinct provider names |
 | `POST` | `/api/resolve` | Resolve model ID → canonical model |
 | `GET` | `/api/health` | Health check |
@@ -102,7 +102,7 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir` |
+| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly` |
 | `resolve_model` | Resolve and look up a model by ID | `input: string` |
 | `get_model` | Get full details for a model | `id: string` |
 | `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset`, `sortBy`, `sortDir` |
@@ -110,6 +110,18 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 | `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
 | `semantic_search` | Find models by natural language similarity | `query: string`, `limit`, `offset` |
 | `get_registry_status` | Current sync state | — |
+| `get_sync_history` | Recent sync attempts with success/error details | `limit` |
+
+Model lifecycle semantics:
+- `isAvailable = true` means the model was present in the latest OpenRouter sync.
+- `isAvailable = false` means the model is unavailable in the latest registry sync. This is inferred from sync absence and is not always a provider-declared retirement notice.
+- `providerExpirationAt` is the scheduled provider expiry date from OpenRouter when available.
+- `retiredAt` is the first sync where this registry observed the model missing.
+- `lastSeenAt` is the most recent successful sync where the model was still present.
+
+Notes:
+- The web UI now uses the term "Unavailable" instead of "Retired" because sync absence and provider-declared expiry are distinct states.
+- The `compare_models` MCP tool now includes lifecycle fields such as `providerExpirationAt`, `lastSeenAt`, `retiredAt`, and `isAvailable` in its response.
 
 ### Resources
 
@@ -159,6 +171,9 @@ cp apps/web/.env.example apps/web/.env.local
 
 # 3. Run database migrations
 pnpm db:migrate
+
+# This also creates/backfills model lifecycle fields such as:
+# provider_expiration_at, last_seen_at, and retired_at
 
 # 4. (Optional) Seed demo data
 pnpm db:seed

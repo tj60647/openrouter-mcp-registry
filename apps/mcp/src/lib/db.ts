@@ -220,9 +220,10 @@ export function createModelRepository(): ModelRepository {
                id, provider, display_name, description, modality,
                context_length, max_completion_tokens,
                input_price_per_1k, output_price_per_1k, image_price_per_1k,
-               created_at, supported_parameters, metadata, fetched_at, is_available
+               created_at, provider_expiration_at, supported_parameters, metadata,
+               fetched_at, last_seen_at, retired_at, is_available
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, TRUE)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NULL, TRUE)
              ON CONFLICT (id) DO UPDATE SET
                provider = EXCLUDED.provider,
                display_name = EXCLUDED.display_name,
@@ -234,9 +235,12 @@ export function createModelRepository(): ModelRepository {
                output_price_per_1k = EXCLUDED.output_price_per_1k,
                image_price_per_1k = EXCLUDED.image_price_per_1k,
                created_at = EXCLUDED.created_at,
+               provider_expiration_at = EXCLUDED.provider_expiration_at,
                supported_parameters = EXCLUDED.supported_parameters,
                metadata = EXCLUDED.metadata,
                fetched_at = EXCLUDED.fetched_at,
+               last_seen_at = EXCLUDED.last_seen_at,
+               retired_at = NULL,
                is_available = TRUE,
                description_embedding = CASE
                  WHEN models.description IS DISTINCT FROM EXCLUDED.description THEN NULL
@@ -254,9 +258,11 @@ export function createModelRepository(): ModelRepository {
               model.outputPricePer1k,
               model.imagePricePer1k,
               model.createdAt?.toISOString() ?? null,
+              model.providerExpirationAt?.toISOString() ?? null,
               model.supportedParameters,
               JSON.stringify(model.metadata),
               model.fetchedAt.toISOString(),
+              model.lastSeenAt?.toISOString() ?? null,
             ]
           );
         }
@@ -265,7 +271,8 @@ export function createModelRepository(): ModelRepository {
         for (const provider of providers) {
           await client.query(
             `UPDATE models
-             SET is_available = FALSE
+             SET is_available = FALSE,
+                 retired_at = COALESCE(retired_at, $2::timestamptz)
              WHERE provider = $1::text
                AND fetched_at < $2::timestamptz`,
             [provider, syncStartedAt.toISOString()]

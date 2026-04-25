@@ -15,7 +15,7 @@ interface ProvidersResponse {
 }
 
 type SortBy = 'id' | 'newest' | 'context' | 'input_price' | 'output_price';
-type Tab = 'active' | 'retired';
+type Tab = 'active' | 'unavailable';
 
 function formatDate(date: Date | string | null): string {
   if (!date) return '—';
@@ -187,7 +187,7 @@ export default function ModelsPage() {
       if (toolsOnly) params.set('toolsOnly', 'true');
       if (reasoningOnly) params.set('reasoningOnly', 'true');
       if (tab === 'active') params.set('availableOnly', 'true');
-      if (tab === 'retired') params.set('retiredOnly', 'true');
+      if (tab === 'unavailable') params.set('retiredOnly', 'true');
       const res = await fetch(`/api/models?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as ModelsResponse;
@@ -237,13 +237,13 @@ export default function ModelsPage() {
       <div>
         <h1>Models</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          All models cached from OpenRouter. Use the column headers to sort or filter by capability.
+          Active means present in the latest registry sync. Unavailable means missing from the latest sync; scheduled provider expiry is tracked separately when OpenRouter supplies it.
         </p>
       </div>
 
-      {/* Active / Retired tabs */}
+      {/* Active / Unavailable tabs */}
       <div className="row" style={{ gap: '0.25rem' }}>
-        {(['active', 'retired'] as Tab[]).map((t) => (
+        {(['active', 'unavailable'] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => { setTab(t); setOffset(0); }}
@@ -351,9 +351,9 @@ export default function ModelsPage() {
                         activeSortBy={sortBy}
                         sortDir={sortDir}
                         onClick={() => handleSortClick('newest')}
-                        title="Sort by publish date"
+                        title={tab === 'active' ? 'Sort by publish date' : 'Sort by first unavailable sync date'}
                       >
-                        Published
+                        {tab === 'active' ? 'Published' : 'Unavailable Since'}
                       </SortableHeader>
                       <FilterHeader
                         active={toolsOnly}
@@ -387,7 +387,7 @@ export default function ModelsPage() {
                           {m.outputPricePer1k != null ? `$${m.outputPricePer1k.toFixed(4)}` : '—'}
                         </td>
                         <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                          {formatDate(m.createdAt)}
+                          {formatDate(tab === 'active' ? m.createdAt : m.retiredAt)}
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           {m.supportedParameters.includes('tools')

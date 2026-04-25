@@ -60,6 +60,9 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
   const createdTimestamp =
     typeof raw['created'] === 'number' ? raw['created'] : undefined;
 
+  const expirationDate =
+    typeof raw['expiration_date'] === 'string' ? raw['expiration_date'] : undefined;
+
   const supportedParameters = Array.isArray(raw['supported_parameters'])
     ? (raw['supported_parameters'] as unknown[]).filter((s): s is string => typeof s === 'string')
     : undefined;
@@ -75,6 +78,7 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
     architecture: _arch,
     top_provider: _tp,
     created: _cr,
+    expiration_date: _ed,
     supported_parameters: _sp,
     ...rest
   } = raw;
@@ -88,6 +92,7 @@ function normalizeModel(raw: Record<string, unknown>): ProviderModel {
     modality,
     maxCompletionTokens,
     createdTimestamp,
+    expirationDate,
     supportedParameters,
     ...rest,
   };

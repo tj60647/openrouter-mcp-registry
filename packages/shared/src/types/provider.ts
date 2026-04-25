@@ -8,6 +8,8 @@ export interface ProviderModel {
   supportedParameters?: string[];
   /** Unix seconds — when the model was published on OpenRouter */
   createdTimestamp?: number;
+  /** ISO date string from OpenRouter when a model has a scheduled expiry */
+  expirationDate?: string;
   pricing?: {
     prompt?: string;
     completion?: string;

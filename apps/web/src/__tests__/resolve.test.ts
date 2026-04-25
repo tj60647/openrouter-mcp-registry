@@ -14,9 +14,12 @@ const fakeModel: Model = {
   outputPricePer1k: null,
   imagePricePer1k: null,
   createdAt: null,
+  providerExpirationAt: null,
   supportedParameters: [],
   metadata: {},
   fetchedAt: new Date(),
+  lastSeenAt: new Date(),
+  retiredAt: null,
   isAvailable: true,
 };
 

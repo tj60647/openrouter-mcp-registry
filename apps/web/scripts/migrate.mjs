@@ -65,9 +65,12 @@ async function migrate() {
       output_price_per_1k NUMERIC(18,10),
       image_price_per_1k NUMERIC(18,10),
       created_at TIMESTAMPTZ,
+      provider_expiration_at TIMESTAMPTZ,
       supported_parameters TEXT[],
       metadata JSONB NOT NULL DEFAULT '{}',
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ,
+      retired_at TIMESTAMPTZ,
       description_embedding vector(1536),
       is_available BOOLEAN NOT NULL DEFAULT TRUE
     )
@@ -79,9 +82,37 @@ async function migrate() {
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS max_completion_tokens INTEGER`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS image_price_per_1k NUMERIC(18,10)`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS provider_expiration_at TIMESTAMPTZ`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS supported_parameters TEXT[]`;
+  await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS retired_at TIMESTAMPTZ`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS description_embedding vector(1536)`;
   await sql`ALTER TABLE models ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT TRUE`;
+
+  await sql`
+    UPDATE models
+    SET provider_expiration_at = COALESCE(
+      provider_expiration_at,
+      CASE
+        WHEN metadata ? 'expiration_date' AND NULLIF(metadata->>'expiration_date', '') IS NOT NULL
+          THEN (metadata->>'expiration_date')::timestamptz
+        ELSE NULL
+      END
+    )
+    WHERE provider_expiration_at IS NULL
+  `;
+
+  await sql`
+    UPDATE models
+    SET last_seen_at = COALESCE(last_seen_at, fetched_at)
+    WHERE last_seen_at IS NULL
+  `;
+
+  await sql`
+    UPDATE models
+    SET retired_at = COALESCE(retired_at, fetched_at)
+    WHERE is_available = FALSE AND retired_at IS NULL
+  `;
 
   await sql`
     CREATE INDEX IF NOT EXISTS models_provider_idx ON models(provider)

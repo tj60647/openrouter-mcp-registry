@@ -282,6 +282,10 @@ function createMcpServer(): McpServer {
           outputPricePer1k: model?.outputPricePer1k ?? null,
           imagePricePer1k: model?.imagePricePer1k ?? null,
           createdAt: model?.createdAt ?? null,
+          providerExpirationAt: model?.providerExpirationAt ?? null,
+          lastSeenAt: model?.lastSeenAt ?? null,
+          retiredAt: model?.retiredAt ?? null,
+          isAvailable: model?.isAvailable ?? null,
           metadata: model?.metadata ?? null,
         }));
 
