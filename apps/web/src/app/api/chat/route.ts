@@ -13,7 +13,9 @@ export const dynamic = 'force-dynamic';
 const SYSTEM_PROMPT =
   `You are a helpful assistant for the OpenRouter MCP Registry. ` +
   `You help users explore, search, and compare AI models available through OpenRouter. ` +
-  `Use the provided tools to fetch accurate, up-to-date data from the registry. Be concise and helpful.`;
+  `Use the provided tools to fetch accurate, up-to-date data from the registry. ` +
+  `For latest/newest questions, call list_models with sortBy: "created_at", sortDir: "desc", and a small limit. ` +
+  `Be concise and helpful.`;
 
 const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'google/gemini-3-flash-preview';
 
@@ -82,7 +84,7 @@ export async function GET(): Promise<Response> {
       if (!client) return [];
       const listed = await client.listTools().catch(() => ({ tools: [] }));
       await client.close().catch(() => {});
-      return listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
+      return listed.tools.map((t: { name: string; description?: string }) => ({ name: t.name, description: t.description ?? '' }));
     })(),
   ]);
 
@@ -132,7 +134,7 @@ export async function POST(req: Request): Promise<Response> {
     const { tools: mcpTools } = await mcpClient.listTools();
 
     const tools: ToolSet = Object.fromEntries(
-      mcpTools.map((t) => [
+      mcpTools.map((t: { name: string; description?: string; inputSchema: unknown }) => [
         t.name,
         {
           description: t.description ?? '',

@@ -23,17 +23,28 @@ function resolveOrderBy(sortBy?: string): string {
   return SORT_COLUMN_MAP[sortBy ?? ''] ?? 'id';
 }
 
+function resolveOrderDirection(sortDir?: string): 'ASC' | 'DESC' {
+  return sortDir === 'desc' ? 'DESC' : 'ASC';
+}
+
+function resolveNullsClause(sortBy?: string): string {
+  return sortBy === 'created_at' ? ' NULLS LAST' : '';
+}
+
 export async function getModels(opts: {
   limit: number;
   offset: number;
   provider?: string;
   query?: string;
   sortBy?: string;
+  sortDir?: string;
   availableOnly?: boolean;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy, availableOnly } = opts;
+  const { limit, offset, provider, query, sortBy, sortDir, availableOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
   const orderCol = resolveOrderBy(sortBy);
+  const orderDir = resolveOrderDirection(sortDir);
+  const nullsClause = resolveNullsClause(sortBy);
 
   const conditions: string[] = [];
   const params: (string | number | null)[] = [];
@@ -53,7 +64,7 @@ export async function getModels(opts: {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
-  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
   const result = await db.query<ModelRow>(queryStr, params);
   return result.rows.map(rowToModel);
@@ -124,9 +135,12 @@ export async function findModelsByCriteria(opts: {
   limit: number;
   offset: number;
   sortBy?: string;
+  sortDir?: string;
 }): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy } = opts;
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy, sortDir } = opts;
   const orderCol = resolveOrderBy(sortBy);
+  const orderDir = resolveOrderDirection(sortDir);
+  const nullsClause = resolveNullsClause(sortBy);
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -150,7 +164,7 @@ export async function findModelsByCriteria(opts: {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(limit, offset);
-  const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
   const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
   return result.rows.map(rowToModel);

@@ -45,15 +45,20 @@ function createMcpServer(): McpServer {
         .optional()
         .default('id')
         .describe('Column to sort results by'),
+      sortDir: z
+        .enum(['asc', 'desc'])
+        .optional()
+        .default('asc')
+        .describe('Sort direction. Use desc with created_at for newest-first results.'),
       availableOnly: z
         .boolean()
         .optional()
         .default(false)
         .describe('When true, only return models that were present in the most recent OpenRouter sync'),
     },
-    async ({ limit, offset, provider, query, sortBy, availableOnly }) => {
+    async ({ limit, offset, provider, query, sortBy, sortDir, availableOnly }) => {
       try {
-        const models = await getModels({ limit, offset, provider, query, sortBy, availableOnly });
+        const models = await getModels({ limit, offset, provider, query, sortBy, sortDir, availableOnly });
         return {
           content: [
             {
@@ -149,10 +154,15 @@ function createMcpServer(): McpServer {
         .optional()
         .default('id')
         .describe('Column to sort results by'),
+      sortDir: z
+        .enum(['asc', 'desc'])
+        .optional()
+        .default('asc')
+        .describe('Sort direction. Use desc with created_at for newest-first results.'),
     },
-    async ({ query, limit, offset, sortBy }) => {
+    async ({ query, limit, offset, sortBy, sortDir }) => {
       try {
-        const models = await getModels({ limit, offset, query, sortBy });
+        const models = await getModels({ limit, offset, query, sortBy, sortDir });
         return {
           content: [
             {
@@ -205,8 +215,13 @@ function createMcpServer(): McpServer {
         .optional()
         .default('id')
         .describe('Column to sort results by'),
+      sortDir: z
+        .enum(['asc', 'desc'])
+        .optional()
+        .default('asc')
+        .describe('Sort direction. Use desc with created_at for newest-first results.'),
     },
-    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy }) => {
+    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy, sortDir }) => {
       try {
         const models = await findModelsByCriteria({
           maxInputPricePer1k,
@@ -216,6 +231,7 @@ function createMcpServer(): McpServer {
           limit,
           offset,
           sortBy,
+          sortDir,
         });
         return {
           content: [

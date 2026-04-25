@@ -102,11 +102,11 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy` |
+| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir` |
 | `resolve_model` | Resolve and look up a model by ID | `input: string` |
 | `get_model` | Get full details for a model | `id: string` |
-| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset`, `sortBy` |
-| `find_models_by_criteria` | Filter by budget, context, and modality | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy` |
+| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset`, `sortBy`, `sortDir` |
+| `find_models_by_criteria` | Filter by budget, context, and modality | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy`, `sortDir` |
 | `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
 | `semantic_search` | Find models by natural language similarity | `query: string`, `limit`, `offset` |
 | `get_registry_status` | Current sync state | — |
