@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function AdminLoginPage() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -14,11 +15,11 @@ export default function AdminLoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
       if (!res.ok) {
         const json = (await res.json()) as { error?: string };
         throw new Error(json.error ?? 'Login failed');
@@ -36,17 +37,23 @@ export default function AdminLoginPage() {
       <div>
         <h1>Admin Login</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          Enter the admin password to access this area.
+          Enter the admin username and password to access this area.
         </p>
       </div>
       {error && <div className="error-msg">{error}</div>}
       <form className="stack" onSubmit={handleSubmit}>
         <input
+          type="text"
+          placeholder="Admin username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoFocus
+        />
+        <input
           type="password"
           placeholder="Admin password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          autoFocus
         />
         <button type="submit" disabled={loading}>
           {loading ? 'Signing in…' : 'Sign in'}
