@@ -208,7 +208,7 @@ export function createModelRepository(): ModelRepository {
                created_at, provider_expiration_at, supported_parameters, metadata,
                fetched_at, last_seen_at, retired_at, is_available
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NULL, TRUE)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, TRUE)
              ON CONFLICT (id) DO UPDATE SET
                provider = EXCLUDED.provider,
                display_name = EXCLUDED.display_name,
