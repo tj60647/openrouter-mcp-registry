@@ -24,8 +24,8 @@ export default function McpInfoPage() {
           {[
             {
               name: 'list_models',
-              description: 'List all models in the registry',
-              params: '{ limit?: number, offset?: number, provider?: string, query?: string }',
+              description: 'List all models in the registry with optional filtering and sorting.',
+              params: '{ limit?: number, offset?: number, provider?: string, query?: string, sortBy?: string, sortDir?: "asc"|"desc", availableOnly?: boolean }',
             },
             {
               name: 'resolve_model',
@@ -40,12 +40,12 @@ export default function McpInfoPage() {
             {
               name: 'search_models',
               description: 'Search models by name, ID, or provider substring',
-              params: '{ query: string, limit?: number, offset?: number }',
+              params: '{ query: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
             },
             {
               name: 'find_models_by_criteria',
               description: 'Filter models by budget, context, and modality constraints',
-              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, modality?: string, limit?: number, offset?: number }',
+              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, modality?: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
             },
             {
               name: 'compare_models',
@@ -59,8 +59,13 @@ export default function McpInfoPage() {
             },
             {
               name: 'get_registry_status',
-              description: 'Get the current sync status of the model registry',
+              description: 'Get the current sync status of the model registry (last sync time, record count, errors)',
               params: '{}',
+            },
+            {
+              name: 'get_sync_history',
+              description: 'Get the history of sync attempts (most recent first), including success/failure, record count, and any error messages',
+              params: '{ limit?: number }',
             },
           ].map((tool) => (
             <div key={tool.name} className="card" style={{ background: 'var(--bg)' }}>
