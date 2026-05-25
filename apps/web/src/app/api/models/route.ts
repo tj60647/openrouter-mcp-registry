@@ -1,21 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PaginationSchema } from '@openrouter-mcp/shared';
-import { getModels, getModelsCount } from '../../../lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const mcpBase = () =>
+  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    const sp = Object.fromEntries(req.nextUrl.searchParams.entries());
-    const parsed = PaginationSchema.safeParse(sp);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    }
-    const { limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = parsed.data;
-    const models = await getModels({ limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly });
-    const count = await getModelsCount({ provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly });
-    return NextResponse.json({ models, count, limit, offset });
+    const res = await fetch(`${mcpBase()}/api/models?${req.nextUrl.searchParams.toString()}`);
+    const data: unknown = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });

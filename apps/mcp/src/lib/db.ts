@@ -4,9 +4,15 @@ import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-
 import type { ModelRepository } from '@openrouter-mcp/shared';
 
 // Whitelist of allowed sort columns mapped to their SQL column names.
-// Used by getModels and findModelsByCriteria to prevent SQL injection.
+// Supports both PaginationSchema aliases (newest, context, input_price, output_price)
+// and raw column names. Used to prevent SQL injection.
 const SORT_COLUMN_MAP: Record<string, string> = {
   id: 'id',
+  newest: 'created_at',
+  context: 'context_length',
+  input_price: 'input_price_per_1k',
+  output_price: 'output_price_per_1k',
+  // raw column aliases kept for internal use
   display_name: 'display_name',
   provider: 'provider',
   context_length: 'context_length',
@@ -16,6 +22,9 @@ const SORT_COLUMN_MAP: Record<string, string> = {
   image_price_per_1k: 'image_price_per_1k',
   created_at: 'created_at',
 };
+
+// Columns that may contain NULLs and need NULLS LAST appended.
+const NULLABLE_SORT_COLUMNS = new Set(['newest', 'context', 'input_price', 'output_price', 'created_at', 'context_length', 'input_price_per_1k', 'output_price_per_1k']);
 
 export type SortBy = keyof typeof SORT_COLUMN_MAP;
 
@@ -28,7 +37,7 @@ function resolveOrderDirection(sortDir?: string): 'ASC' | 'DESC' {
 }
 
 function resolveNullsClause(sortBy?: string): string {
-  return sortBy === 'created_at' ? ' NULLS LAST' : '';
+  return NULLABLE_SORT_COLUMNS.has(sortBy ?? '') ? ' NULLS LAST' : '';
 }
 
 export async function getModels(opts: {
@@ -38,9 +47,12 @@ export async function getModels(opts: {
   query?: string;
   sortBy?: string;
   sortDir?: string;
+  toolsOnly?: boolean;
+  reasoningOnly?: boolean;
   availableOnly?: boolean;
+  retiredOnly?: boolean;
 }): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy, sortDir, availableOnly } = opts;
+  const { limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
   const orderCol = resolveOrderBy(sortBy);
   const orderDir = resolveOrderDirection(sortDir);
@@ -58,8 +70,17 @@ export async function getModels(opts: {
     const n = params.length;
     conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
   }
+  if (toolsOnly) {
+    conditions.push(`'tools' = ANY(supported_parameters)`);
+  }
+  if (reasoningOnly) {
+    conditions.push(`'reasoning' = ANY(supported_parameters)`);
+  }
   if (availableOnly) {
     conditions.push(`is_available = TRUE`);
+  }
+  if (retiredOnly) {
+    conditions.push(`is_available = FALSE`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -73,9 +94,12 @@ export async function getModels(opts: {
 export async function getModelsCount(opts: {
   provider?: string;
   query?: string;
+  toolsOnly?: boolean;
+  reasoningOnly?: boolean;
   availableOnly?: boolean;
+  retiredOnly?: boolean;
 }): Promise<number> {
-  const { provider, query, availableOnly } = opts;
+  const { provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
   const likeQuery = query ? `%${query}%` : null;
 
   const conditions: string[] = [];
@@ -93,6 +117,15 @@ export async function getModelsCount(opts: {
   if (availableOnly) {
     conditions.push(`is_available = TRUE`);
   }
+  if (toolsOnly) {
+    conditions.push(`'tools' = ANY(supported_parameters)`);
+  }
+  if (reasoningOnly) {
+    conditions.push(`'reasoning' = ANY(supported_parameters)`);
+  }
+  if (retiredOnly) {
+    conditions.push(`is_available = FALSE`);
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const queryStr = `SELECT COUNT(*)::text AS count FROM models ${where}`;
@@ -107,6 +140,15 @@ export async function getModelById(id: string): Promise<Model | null> {
     [id]
   );
   return result.rows[0] ? rowToModel(result.rows[0]) : null;
+}
+
+export async function getProviders(): Promise<string[]> {
+  const result = await db.query<{ provider: string }>(
+    `SELECT DISTINCT provider FROM models
+     WHERE provider IS NOT NULL AND provider != ''
+     ORDER BY provider`
+  );
+  return result.rows.map((r) => r.provider);
 }
 
 export async function getSyncStatus(): Promise<SyncStatus | null> {

@@ -19,8 +19,7 @@ flowchart LR
 
   Shared --> WebApp
   Shared --> McpApp
-  WebApp -->|MCP Streamable HTTP| McpApp
-  WebApp --> Database
+  WebApp -->|MCP + REST| McpApp
   McpApp --> Database
   Clients --> McpApp
   Cron --> OpenRouter

@@ -3,7 +3,6 @@ import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai'
 import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { getToolCapableModels } from '../../../lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,12 +38,14 @@ const FALLBACK_MODELS = [
   'meta-llama/llama-3.3-70b-instruct',
 ] as const;
 
-/** Fetch the current list of tool-capable text models from the DB, sorted newest-first. */
+/** Fetch the current list of tool-capable text models from the MCP server, sorted newest-first. */
 async function fetchAvailableModels(): Promise<string[]> {
   try {
-    const models = await getToolCapableModels(20);
-    const ids = models.map((m) => m.id);
-    // Always include the configured default even if the DB doesn't have it yet.
+    const mcpBase = (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+    const res = await fetch(`${mcpBase}/api/models?toolsOnly=true&availableOnly=true&sortBy=newest&sortDir=desc&limit=20`);
+    const data = await res.json() as { models?: Array<{ id: string }> };
+    const ids = (data.models ?? []).map((m) => m.id);
+    // Always include the configured default even if the registry doesn't have it yet.
     if (!ids.includes(CHAT_MODEL)) ids.unshift(CHAT_MODEL);
     return ids;
   } catch {

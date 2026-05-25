@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ModelSyncService, OpenRouterProvider, logger } from '@openrouter-mcp/shared';
-import { createModelRepository } from '../../../../lib/db';
-import { generatePendingEmbeddings } from '../../../../lib/embeddings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+const mcpBase = () =>
+  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  // Validate cron secret before forwarding.
   const cronSecret = process.env['CRON_SECRET'];
   if (cronSecret) {
     const auth = req.headers.get('authorization');
@@ -17,31 +18,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const apiKey = process.env['OPENROUTER_API_KEY'];
-    if (!apiKey) {
-      return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 503 });
-    }
-
-    const provider = new OpenRouterProvider(apiKey);
-    const repository = createModelRepository();
-    const syncService = new ModelSyncService(provider, repository);
-
-    logger.info('Cron sync started');
-    const result = await syncService.sync();
-    logger.info('Cron sync completed', { result });
-
-    // Generate embeddings for any models that now have a description but no vector yet.
-    // Uses OPENROUTER_API_KEY (already required above) to call openai/text-embedding-3-small via OpenRouter.
-    if (result.success) {
-      const embeddingsGenerated = await generatePendingEmbeddings(apiKey);
-      logger.info('Embeddings generated', { embeddingsGenerated });
-      return NextResponse.json({ ...result, embeddingsGenerated });
-    }
-
-    return NextResponse.json(result);
+    const headers: Record<string, string> = {};
+    if (cronSecret) headers['Authorization'] = `Bearer ${cronSecret}`;
+    const res = await fetch(`${mcpBase()}/api/cron/sync`, { headers });
+    const data: unknown = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    logger.error('Cron sync failed', { error: message });
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
