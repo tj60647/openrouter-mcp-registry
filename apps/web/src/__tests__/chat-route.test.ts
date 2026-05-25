@@ -168,4 +168,71 @@ describe('POST /api/chat', () => {
       expect.stringContaining('/')
     );
   });
+
+  it('passes MCP tools to streamText when the MCP server returns tools', async () => {
+    // Arrange: MCP server returns one tool
+    mockMcpClient.listTools.mockResolvedValueOnce({
+      tools: [
+        {
+          name: 'list_models',
+          description: 'List available models',
+          inputSchema: {
+            type: 'object',
+            properties: { limit: { type: 'number' } },
+          },
+        },
+      ],
+    });
+
+    const { streamText } = await import('ai');
+    const { POST } = await import('../app/api/chat/route');
+
+    await POST(makePostRequest({ messages: [] }));
+
+    // streamText must have been called with a non-empty tools object
+    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          list_models: expect.objectContaining({
+            description: 'List available models',
+            execute: expect.any(Function),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('tool execute function calls mcpClient.callTool and returns text', async () => {
+    // Arrange: MCP server returns one tool
+    mockMcpClient.listTools.mockResolvedValueOnce({
+      tools: [
+        {
+          name: 'get_model',
+          description: 'Get model by id',
+          inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+        },
+      ],
+    });
+    mockMcpClient.callTool.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"found":true}' }],
+    });
+
+    let capturedTools: Record<string, { execute: (args: unknown) => Promise<string> }> | undefined;
+    const { streamText } = await import('ai');
+    vi.mocked(streamText).mockImplementationOnce((opts) => {
+      capturedTools = opts.tools as typeof capturedTools;
+      return { toUIMessageStreamResponse: () => new Response('ok', { status: 200 }) } as ReturnType<typeof streamText>;
+    });
+
+    const { POST } = await import('../app/api/chat/route');
+    await POST(makePostRequest({ messages: [] }));
+
+    // Call the captured execute function and verify it proxies to callTool
+    const result = await capturedTools?.['get_model']?.execute({ id: 'openai/gpt-4o' });
+    expect(mockMcpClient.callTool).toHaveBeenCalledWith({
+      name: 'get_model',
+      arguments: { id: 'openai/gpt-4o' },
+    });
+    expect(result).toBe('{"found":true}');
+  });
 });
