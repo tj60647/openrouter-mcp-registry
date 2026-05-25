@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
-import type { DynamicToolUIPart, TextUIPart } from 'ai';
+import type { DynamicToolUIPart, TextUIPart, UIMessagePart, UIDataTypes, UITools } from 'ai';
+import { getToolName, isStaticToolUIPart } from 'ai';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -435,32 +436,38 @@ function ReasoningBlock({ content }: { content: string }) {
 
 // ── ToolCallBlock ─────────────────────────────────────────────────────────────
 
-// Extend the base type to access runtime-available fields
-type ToolPartFull = DynamicToolUIPart & {
-  args?: Record<string, unknown> | string;
-  result?: unknown;
+// Union of static (tool-NAME) and dynamic (dynamic-tool) tool part shapes
+type ToolPartFull = UIMessagePart<UIDataTypes, UITools> & {
+  toolName?: string;
+  toolCallId?: string;
+  input?: Record<string, unknown> | string | unknown;
+  output?: unknown;
   errorText?: string;
+  state?: string;
 };
 
-function ToolCallBlock({ part }: { part: DynamicToolUIPart }) {
+function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) {
   const [open, setOpen] = useState(false);
   const p = part as ToolPartFull;
-  const isError = part.state === 'output-error';
-  const isDone = part.state === 'output-available' || isError;
+  const isError = p.state === 'output-error';
+  const isDone = p.state === 'output-available' || isError;
   const isRunning = !isDone;
+  const displayName = isStaticToolUIPart(part as Parameters<typeof isStaticToolUIPart>[0])
+    ? getToolName(part as Parameters<typeof getToolName>[0])
+    : (p.toolName ?? '?');
 
   const argsStr =
-    p.args !== undefined
-      ? typeof p.args === 'string'
-        ? p.args
-        : JSON.stringify(p.args, null, 2)
+    p.input !== undefined
+      ? typeof p.input === 'string'
+        ? p.input
+        : JSON.stringify(p.input, null, 2)
       : null;
 
   const resultStr =
-    p.result !== undefined
-      ? typeof p.result === 'string'
-        ? p.result
-        : JSON.stringify(p.result, null, 2)
+    p.output !== undefined
+      ? typeof p.output === 'string'
+        ? p.output
+        : JSON.stringify(p.output, null, 2)
       : null;
 
   const hasDetails = (argsStr && argsStr !== '{}') || resultStr || p.errorText;
@@ -521,7 +528,7 @@ function ToolCallBlock({ part }: { part: DynamicToolUIPart }) {
           <span style={{ fontSize: '0.9rem', color: 'var(--success)', flexShrink: 0 }}>✓</span>
         )}
         <span>
-          Tool: <code style={{ fontSize: '0.78rem' }}>{part.toolName}</code>
+          Tool: <code style={{ fontSize: '0.78rem' }}>{displayName}</code>
         </span>
         {hasDetails && (
           <span
@@ -838,7 +845,8 @@ export default function DemoPage() {
                             (p) =>
                               p.type === 'text' ||
                               p.type === 'reasoning' ||
-                              p.type === 'dynamic-tool'
+                              p.type === 'dynamic-tool' ||
+                              isStaticToolUIPart(p as Parameters<typeof isStaticToolUIPart>[0])
                           ) && loading ? (
                             <div style={{ padding: '0.25rem 0' }}>
                               <PulsingIndicator label="Thinking" />
@@ -848,8 +856,8 @@ export default function DemoPage() {
                               if (part.type === 'reasoning') {
                                 return <ReasoningBlock key={i} content={part.text} />;
                               }
-                              if (part.type === 'dynamic-tool') {
-                                return <ToolCallBlock key={i} part={part as DynamicToolUIPart} />;
+                              if (part.type === 'dynamic-tool' || isStaticToolUIPart(part as Parameters<typeof isStaticToolUIPart>[0])) {
+                                return <ToolCallBlock key={i} part={part} />;
                               }
                               if (part.type === 'text') {
                                 return (
@@ -863,10 +871,10 @@ export default function DemoPage() {
                         {/* Tools-used + model footer */}
                         {(() => {
                           const toolParts = message.parts.filter(
-                            (p) => p.type === 'dynamic-tool'
-                          ) as DynamicToolUIPart[];
+                            (p) => p.type === 'dynamic-tool' || isStaticToolUIPart(p as Parameters<typeof isStaticToolUIPart>[0])
+                          );
                           const uniqueTools = [
-                            ...new Set(toolParts.map((p) => p.toolName)),
+                            ...new Set(toolParts.map((p) => getToolName(p as Parameters<typeof getToolName>[0]))),
                           ];
                           return (
                             <div
