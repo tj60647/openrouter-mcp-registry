@@ -30,6 +30,7 @@ flowchart LR
 
 export default function HomePage() {
   const mcpUrl = process.env['NEXT_PUBLIC_MCP_URL'] ?? 'https://your-mcp-app.vercel.app';
+  const webUrl = process.env['NEXT_PUBLIC_APP_URL']?.replace(/\/$/, '') ?? 'https://your-web-app.vercel.app';
 
   return (
     <div className="stack" style={{ gap: '2.5rem', marginTop: '1rem' }}>
@@ -94,11 +95,11 @@ export default function HomePage() {
           <div className="stack" style={{ gap: '0.75rem' }}>
             <div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>List models</p>
-              <pre><code>GET /api/models</code></pre>
+              <pre><code>GET {webUrl}/api/models</code></pre>
             </div>
             <div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>Resolve model ID</p>
-              <pre><code>POST /api/resolve{'\n'}{'{"input":"anthropic/claude-sonnet-4-5"}'}</code></pre>
+              <pre><code>POST {webUrl}/api/resolve{'\n'}{'{"input":"anthropic/claude-sonnet-4-5"}'}</code></pre>
             </div>
             <div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.3rem' }}>MCP endpoint (separate deployment)</p>
