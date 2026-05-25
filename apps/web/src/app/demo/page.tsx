@@ -39,6 +39,7 @@ const EXAMPLE_PROMPTS = [
   { label: '128k context models', text: 'Find models with at least 128k context window' },
   { label: 'Compare Claude vs GPT-4o', text: 'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o' },
   { label: 'Registry status', text: 'When was the registry last synced?' },
+  { label: 'Build poetry writing agent', text: 'I need to build a poetry writing agent. What is the latest model from Google available in the registry? Give me a recommended model ID, a system prompt, and suggested temperature and max token settings for a creative poetry writing agent.' },
 ];
 
 // ── PulsingIndicator ──────────────────────────────────────────────────────────
@@ -673,7 +674,9 @@ export default function DemoPage() {
         <div>
           <h1>Live Demo</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            Chat with an AI assistant backed by live MCP registry tools.
+            Imagine you are an AI agent whose job is to build another agent — this assistant knows
+            the live model registry and can help you pick the right model, write a system prompt,
+            and configure parameters for any agent you want to create.
           </p>
         </div>
         <div
@@ -741,8 +744,12 @@ export default function DemoPage() {
             >
               {messages.length === 0 && !loading && (
                 <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  <p style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>
-                    Ask me about models in the registry ↓
+                  <p style={{ marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                    Imagine you&apos;re an agent that needs to build another agent.
+                  </p>
+                  <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem', opacity: 0.75 }}>
+                    Ask me to find the best model, write a system prompt, or configure parameters
+                    for any kind of agent you want to create. Try the chips below to get started ↓
                   </p>
                 </div>
               )}
@@ -831,20 +838,62 @@ export default function DemoPage() {
                             })
                           )}
                         </div>
-                        {modelLabel && (
-                          <div
-                            style={{
-                              fontSize: '0.65rem',
-                              color: 'var(--text-muted)',
-                              opacity: 0.6,
-                              marginTop: '0.2rem',
-                              paddingLeft: '0.35rem',
-                              fontFamily: 'var(--mono)',
-                            }}
-                          >
-                            {modelLabel}
-                          </div>
-                        )}
+                        {/* Tools-used + model footer */}
+                        {(() => {
+                          const toolParts = message.parts.filter(
+                            (p) => p.type === 'dynamic-tool'
+                          ) as DynamicToolUIPart[];
+                          const uniqueTools = [
+                            ...new Set(toolParts.map((p) => p.toolName)),
+                          ];
+                          return (
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                                gap: '0.3rem',
+                                marginTop: '0.3rem',
+                                paddingLeft: '0.35rem',
+                              }}
+                            >
+                              {uniqueTools.map((name) => (
+                                <span
+                                  key={name}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    fontSize: '0.65rem',
+                                    fontFamily: 'var(--mono)',
+                                    color: 'var(--accent)',
+                                    background: 'rgba(99,102,241,0.1)',
+                                    border: '1px solid rgba(99,102,241,0.25)',
+                                    borderRadius: 4,
+                                    padding: '0.1rem 0.45rem',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  <span style={{ opacity: 0.7 }}>⚡</span>
+                                  {name}
+                                </span>
+                              ))}
+                              {modelLabel && (
+                                <span
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    color: 'var(--text-muted)',
+                                    opacity: 0.55,
+                                    fontFamily: 'var(--mono)',
+                                    marginLeft: uniqueTools.length > 0 ? '0.15rem' : 0,
+                                  }}
+                                >
+                                  {modelLabel}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </>
                     )}
                   </div>
