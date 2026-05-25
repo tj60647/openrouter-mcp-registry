@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
 import type { DynamicToolUIPart, TextUIPart, UIMessagePart, UIDataTypes, UITools } from 'ai';
 import { getToolName, isStaticToolUIPart } from 'ai';
+import { Wrench } from 'lucide-react';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -635,7 +636,7 @@ export default function DemoPage() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [temperature, setTemperature] = useState(0);
   const [maxOutputTokens, setMaxOutputTokens] = useState<number | undefined>(undefined);
-  const [showPanel, setShowPanel] = useState(true);
+  const [showPanel, setShowPanel] = useState(false);
 
   const chatBody = useMemo(
     () => ({
@@ -904,16 +905,7 @@ export default function DemoPage() {
                                     whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  <svg
-                                    width="10"
-                                    height="10"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                    style={{ opacity: 0.7, flexShrink: 0 }}
-                                    aria-hidden="true"
-                                  >
-                                    <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z" />
-                                  </svg>
+                                  <Wrench size={9} style={{ opacity: 0.65, flexShrink: 0 }} aria-hidden />
                                   {name}
                                 </span>
                               ))}
