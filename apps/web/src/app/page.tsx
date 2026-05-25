@@ -3,28 +3,24 @@ import MermaidDiagram from '../components/MermaidDiagram';
 
 const architectureChart = `
 flowchart LR
-  subgraph Web["Vercel Deployment: web (demo UI + MCP-client chatbot)"]
-    WebApp["apps/web<br/>Next.js demo UI"]
+  subgraph Web["Vercel Deployment: web"]
+    WebApp["apps/web<br/>Next.js demo UI + chatbot"]
   end
 
   subgraph Mcp["Vercel Deployment: mcp"]
-    McpApp["apps/mcp<br/>Next.js MCP + REST"]
-    Database[("Vercel Postgres<br/>models<br/>sync_status")]
+    McpApp["apps/mcp<br/>MCP server + REST API"]
+    Database[("Vercel Postgres<br/>models · sync_status")]
     Cron["Scheduled sync job"]
   end
 
-  Shared["packages/shared<br/>types + services"]
   OpenRouter["OpenRouter API"]
   Clients["AI clients / coding agents"]
 
-  Shared --> WebApp
-  Shared --> McpApp
-  WebApp -->|MCP + REST| McpApp
-  McpApp --> Database
-  Clients --> McpApp
-  Cron --> OpenRouter
-  OpenRouter --> Cron
-  Cron --> Database
+  WebApp -->|REST proxy| McpApp
+  McpApp <--> Database
+  Clients -->|MCP / REST| McpApp
+  Cron -->|fetch catalog| OpenRouter
+  Cron -->|upsert rows| Database
 `.trim();
 
 export default function HomePage() {
