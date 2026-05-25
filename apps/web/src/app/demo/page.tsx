@@ -40,7 +40,7 @@ const EXAMPLE_PROMPTS = [
   { label: '128k context models', text: 'Find models with at least 128k context window' },
   { label: 'Compare Claude vs GPT-4o', text: 'Compare anthropic/claude-sonnet-4-5 and openai/gpt-4o' },
   { label: 'Registry status', text: 'When was the registry last synced?' },
-  { label: 'Build poetry writing agent', text: 'I need to build a poetry writing agent. What is the latest model from Google available in the registry? Give me a recommended model ID, a system prompt, and suggested temperature and max token settings for a creative poetry writing agent.' },
+  { label: 'Build poetry writing agent', text: 'I need to build a poetry writing agent. What is the latest model from Google available in the registry? Give me a recommended model ID, a system prompt, and suggested temperature and max token settings — and show me a short TypeScript example using the Vercel AI SDK that wires it all together.' },
 ];
 
 // ── PulsingIndicator ──────────────────────────────────────────────────────────
