@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
-import type { DynamicToolUIPart, TextUIPart, UIMessagePart, UIDataTypes, UITools } from 'ai';
+import type { TextUIPart, UIMessagePart, UIDataTypes, UITools } from 'ai';
 import { getToolName, isStaticToolUIPart } from 'ai';
 import { Wrench } from 'lucide-react';
 import MarkdownRenderer from '../../components/MarkdownRenderer';

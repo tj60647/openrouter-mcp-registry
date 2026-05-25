@@ -558,6 +558,8 @@ Steps:
   return server;
 }
 
+export { createMcpServer };
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const authError = validateMcpToken(req);
   if (authError) return authError;
