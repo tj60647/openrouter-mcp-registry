@@ -1,10 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   ModelRegistry,
-  logger,
 } from '@openrouter-mcp/shared';
 import {
   getModels,
@@ -14,17 +11,41 @@ import {
   findModelsByCriteria,
   semanticSearchModels,
 } from '../../../lib/db';
-import { validateMcpToken } from '../../../lib/auth';
 import { generateEmbedding } from '../../../lib/embeddings';
+import { verifyAccessToken } from '../../../lib/oauth';
+import { createMcpHandler, withMcpAuth } from 'mcp-handler';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+/**
+ * Verify an incoming Bearer token against our self-hosted OAuth AS.
+ *
+ * Open mode: when OAUTH_JWT_SECRET is not configured, every connection is
+ * accepted with anonymous identity (matches the old MCP_API_KEY=unset behaviour).
+ */
+const verifyToken = async (
+  _req: Request,
+  bearerToken?: string,
+): Promise<AuthInfo | undefined> => {
+  const jwtSecret = process.env['OAUTH_JWT_SECRET'];
+  if (!jwtSecret) {
+    // Open mode — no auth configured.
+    return { token: bearerToken ?? '', clientId: 'anonymous', scopes: ['mcp:read'] };
+  }
+  if (!bearerToken) return undefined;
+  try {
+    const claims = await verifyAccessToken(bearerToken);
+    return {
+      token: bearerToken,
+      clientId: claims.sub ?? 'unknown',
+      scopes: (claims.scope ?? 'mcp:read').split(' ').filter(Boolean),
+    };
+  } catch {
+    return undefined;
+  }
+};
 
-function createMcpServer(): McpServer {
-  const server = new McpServer({
-    name: 'openrouter-mcp-registry',
-    version: '1.0.0',
-  });
+const handler = createMcpHandler(
+  async (server) => {
 
   // Tool: list_models
   server.tool(
@@ -555,70 +576,15 @@ Steps:
     }
   );
 
-  return server;
-}
+  },
+  { name: 'openrouter-mcp-registry', version: '1.0.0' },
+  { basePath: '/api', maxDuration: 60 },
+);
 
-export { createMcpServer };
+const authHandler = withMcpAuth(handler, verifyToken, {
+  required: true,
+  requiredScopes: ['mcp:read'],
+  resourceMetadataPath: '/.well-known/oauth-protected-resource',
+});
 
-export async function POST(req: NextRequest): Promise<NextResponse> {
-  const authError = validateMcpToken(req);
-  if (authError) return authError;
-
-  try {
-    const body = await req.text();
-    const transport = new WebStandardStreamableHTTPServerTransport({});
-
-    const server = createMcpServer();
-    await server.connect(transport);
-
-    const response = await transport.handleRequest(
-      new Request(req.url, {
-        method: req.method,
-        headers: Object.fromEntries(req.headers.entries()),
-        body,
-      })
-    );
-
-    return new NextResponse(response.body, {
-      status: response.status,
-      headers: Object.fromEntries(response.headers.entries()),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.error('MCP request failed', { error: message });
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
-
-export async function GET(req: NextRequest): Promise<NextResponse> {
-  const authError = validateMcpToken(req);
-  if (authError) return authError;
-
-  return NextResponse.json({
-    name: 'openrouter-mcp-registry',
-    version: '1.0.0',
-    description: 'MCP server for OpenRouter model registry',
-    tools: [
-      'list_models',
-      'resolve_model',
-      'get_model',
-      'search_models',
-      'find_models_by_criteria',
-      'compare_models',
-      'semantic_search',
-      'get_registry_status',
-      'get_sync_history',
-    ],
-    resources: [
-      'registry://models',
-      'registry://status',
-      'registry://models/{id}',
-    ],
-    prompts: [
-      'select_model',
-      'compare_models_prompt',
-    ],
-    transport: 'streamable-http',
-    endpoint: '/api/mcp',
-  });
-}
+export { authHandler as GET, authHandler as POST, authHandler as DELETE };
