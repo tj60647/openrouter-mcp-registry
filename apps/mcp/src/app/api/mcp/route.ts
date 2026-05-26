@@ -16,6 +16,11 @@ import {
 } from '../../../lib/db';
 import { validateMcpToken } from '../../../lib/auth';
 import { generateEmbedding } from '../../../lib/embeddings';
+import { checkRateLimit } from '../../../lib/rateLimit';
+
+// 120 MCP requests per minute per IP; intentionally generous because each
+// request can encapsulate multiple tool calls.
+const MCP_RATE_LIMIT = { limit: 120, windowMs: 60_000 };
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -563,6 +568,12 @@ export { createMcpServer };
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const authError = validateMcpToken(req);
   if (authError) return authError;
+
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  if (!checkRateLimit(`mcp:${ip}`, MCP_RATE_LIMIT)) {
+    logger.warn('MCP rate limit exceeded', { ip });
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  }
 
   try {
     const body = await req.text();

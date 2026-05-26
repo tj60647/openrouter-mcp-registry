@@ -8,9 +8,13 @@ const mcpBase = () =>
   (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  // Validate cron secret before forwarding.
+  // In production, CRON_SECRET must be configured — fail closed.
   const cronSecret = process.env['CRON_SECRET'];
-  if (cronSecret) {
+  if (!cronSecret) {
+    if (process.env['NODE_ENV'] === 'production') {
+      return NextResponse.json({ error: 'Cron auth not configured' }, { status: 503 });
+    }
+  } else {
     const auth = req.headers.get('authorization');
     if (auth !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

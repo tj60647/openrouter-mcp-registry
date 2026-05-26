@@ -3,9 +3,24 @@ import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai'
 import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { checkRateLimit } from '../../../lib/rateLimit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// ── Rate-limit config ─────────────────────────────────────────────────────────
+// 20 chat POST requests per minute per IP — each call may spawn multiple LLM
+// round-trips and OpenRouter embedding calls, making it a costly operation.
+const CHAT_RATE_LIMIT = { limit: 20, windowMs: 60_000 };
+
+// ── Payload constraints ───────────────────────────────────────────────────────
+const MAX_BODY_BYTES = 100 * 1024; // 100 KB
+const MAX_MESSAGES = 50;
+const MAX_MESSAGE_CHARS = 32_768; // 32 KB per individual message content string
+const MAX_OUTPUT_TOKENS = 16_384;
+const MAX_TEMPERATURE = 2.0;
+// Model IDs must be "<provider>/<model>" with safe characters only.
+const MODEL_ID_RE = /^[a-zA-Z0-9_\-./]{1,256}$/;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -106,6 +121,14 @@ export async function GET(): Promise<Response> {
 // ── POST – streaming chat ─────────────────────────────────────────────────────
 
 export async function POST(req: Request): Promise<Response> {
+  // ── Rate limiting ───────────────────────────────────────────────────────────
+  const forwarded = (req as { headers: Headers }).headers.get('x-forwarded-for');
+  const ip = forwarded?.split(',')[0]?.trim() ?? 'unknown';
+  if (!checkRateLimit(`chat:${ip}`, CHAT_RATE_LIMIT)) {
+    return Response.json({ error: 'Too many requests. Please slow down.' }, { status: 429 });
+  }
+
+  // ── Prerequisite checks ─────────────────────────────────────────────────────
   const apiKey = process.env['OPENROUTER_API_KEY'];
   if (!apiKey) {
     return Response.json({ error: 'OPENROUTER_API_KEY is not configured' }, { status: 503 });
@@ -117,14 +140,69 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
 
+  // ── Payload size guard ──────────────────────────────────────────────────────
+  const contentLength = Number((req as { headers: Headers }).headers.get('content-length') ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return Response.json({ error: 'Request body too large.' }, { status: 413 });
+  }
+
+  let rawBody: string;
+  try {
+    rawBody = await req.text();
+  } catch {
+    return Response.json({ error: 'Failed to read request body.' }, { status: 400 });
+  }
+  if (rawBody.length > MAX_BODY_BYTES) {
+    return Response.json({ error: 'Request body too large.' }, { status: 413 });
+  }
+
   let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   try {
-    parsedBody = (await req.json()) as { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
+    parsedBody = JSON.parse(rawBody) as { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
+  // ── Input validation ────────────────────────────────────────────────────────
   const { messages, model: requestedModel, temperature, maxOutputTokens } = parsedBody;
+
+  if (!Array.isArray(messages)) {
+    return Response.json({ error: 'messages must be an array.' }, { status: 400 });
+  }
+  if (messages.length > MAX_MESSAGES) {
+    return Response.json({ error: `Too many messages (max ${MAX_MESSAGES}).` }, { status: 400 });
+  }
+  for (const msg of messages) {
+    const parts: unknown = (msg as { content?: unknown }).content;
+    if (typeof parts === 'string' && parts.length > MAX_MESSAGE_CHARS) {
+      return Response.json({ error: 'Message content too long.' }, { status: 400 });
+    }
+    if (Array.isArray(parts)) {
+      for (const part of parts) {
+        if (
+          typeof part === 'object' &&
+          part !== null &&
+          'type' in part &&
+          (part as { type: unknown }).type === 'text' &&
+          typeof (part as { text?: unknown }).text === 'string' &&
+          ((part as { text: string }).text).length > MAX_MESSAGE_CHARS
+        ) {
+          return Response.json({ error: 'Message content too long.' }, { status: 400 });
+        }
+      }
+    }
+  }
+
+  if (requestedModel !== undefined && !MODEL_ID_RE.test(requestedModel)) {
+    return Response.json({ error: 'Invalid model ID.' }, { status: 400 });
+  }
+  if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > MAX_TEMPERATURE)) {
+    return Response.json({ error: `temperature must be a number between 0 and ${MAX_TEMPERATURE}.` }, { status: 400 });
+  }
+  if (maxOutputTokens !== undefined && (typeof maxOutputTokens !== 'number' || maxOutputTokens < 1 || maxOutputTokens > MAX_OUTPUT_TOKENS)) {
+    return Response.json({ error: `maxOutputTokens must be between 1 and ${MAX_OUTPUT_TOKENS}.` }, { status: 400 });
+  }
+
   const chatModel = requestedModel ?? CHAT_MODEL;
 
   const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
