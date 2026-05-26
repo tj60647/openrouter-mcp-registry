@@ -46,7 +46,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // Guard against Vercel function timeout: skip embeddings if less than 10 seconds remain.
     if (result.success) {
       const elapsed = Date.now() - syncStart;
-      const budgetMs = (maxDuration - 10) * 1000; // reserve 10 s for response
+      const budgetMs = (maxDuration - 10) * 1000; // reserve 10 seconds for response
       if (elapsed < budgetMs) {
         const embStart = Date.now();
         const embeddingsGenerated = await generatePendingEmbeddings(apiKey);

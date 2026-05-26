@@ -19,8 +19,15 @@ const MAX_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 32_768; // 32 KB per individual message content string
 const MAX_OUTPUT_TOKENS = 16_384;
 const MAX_TEMPERATURE = 2.0;
-// Model IDs must be "<provider>/<model>" with safe characters only.
-const MODEL_ID_RE = /^[a-zA-Z0-9_\-./]{1,256}$/;
+// Model IDs must follow the "<provider>/<model>" format with safe characters only.
+const MODEL_ID_RE = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/;
+
+/** Returns true when a single text-part content value exceeds the size limit. */
+function isOversizedTextPart(part: unknown): boolean {
+  if (typeof part !== 'object' || part === null) return false;
+  const p = part as Record<string, unknown>;
+  return p['type'] === 'text' && typeof p['text'] === 'string' && p['text'].length > MAX_MESSAGE_CHARS;
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -177,19 +184,8 @@ export async function POST(req: Request): Promise<Response> {
     if (typeof parts === 'string' && parts.length > MAX_MESSAGE_CHARS) {
       return Response.json({ error: 'Message content too long.' }, { status: 400 });
     }
-    if (Array.isArray(parts)) {
-      for (const part of parts) {
-        if (
-          typeof part === 'object' &&
-          part !== null &&
-          'type' in part &&
-          (part as { type: unknown }).type === 'text' &&
-          typeof (part as { text?: unknown }).text === 'string' &&
-          ((part as { text: string }).text).length > MAX_MESSAGE_CHARS
-        ) {
-          return Response.json({ error: 'Message content too long.' }, { status: 400 });
-        }
-      }
+    if (Array.isArray(parts) && parts.some(isOversizedTextPart)) {
+      return Response.json({ error: 'Message content too long.' }, { status: 400 });
     }
   }
 

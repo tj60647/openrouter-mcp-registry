@@ -13,6 +13,7 @@
 interface Entry {
   count: number;
   windowStart: number;
+  windowMs: number;
 }
 
 const PRUNE_THRESHOLD = 5_000;
@@ -33,9 +34,9 @@ export function checkRateLimit(key: string, { limit, windowMs }: RateLimitOption
   const now = Date.now();
   const entry = store.get(key);
 
-  if (!entry || now - entry.windowStart > windowMs) {
-    store.set(key, { count: 1, windowStart: now });
-    maybePrune(now, windowMs);
+  if (!entry || now - entry.windowStart > entry.windowMs) {
+    store.set(key, { count: 1, windowStart: now, windowMs });
+    maybePrune(now);
     return true;
   }
 
@@ -47,10 +48,10 @@ export function checkRateLimit(key: string, { limit, windowMs }: RateLimitOption
   return true;
 }
 
-function maybePrune(now: number, windowMs: number): void {
+function maybePrune(now: number): void {
   if (store.size < PRUNE_THRESHOLD) return;
   for (const [key, entry] of store) {
-    if (now - entry.windowStart > windowMs) {
+    if (now - entry.windowStart > entry.windowMs) {
       store.delete(key);
     }
   }
