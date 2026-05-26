@@ -69,11 +69,17 @@ vi.mock('../lib/embeddings', () => ({
   generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...(args as [])),
 }));
 
-// ── Mock Next.js server internals (not needed for tool tests) ─────────────────
+// ── Mock mcp-handler (not needed for tool unit tests) ─────────────────────────
 
-vi.mock('../lib/auth', () => ({
-  validateAdminToken: vi.fn().mockReturnValue(null),
-  validateMcpToken: vi.fn().mockReturnValue(null),
+vi.mock('mcp-handler', () => ({
+  createMcpHandler: vi.fn(),
+  withMcpAuth: vi.fn(),
+}));
+
+// ── Mock oauth module (not needed for tool unit tests) ────────────────────────
+
+vi.mock('../lib/oauth', () => ({
+  verifyAccessToken: vi.fn(),
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -129,11 +135,13 @@ function parseResult(result: ToolResult): unknown {
   return JSON.parse(text);
 }
 
-// ── Populate tool handlers by calling createMcpServer ────────────────────────
+// ── Populate tool handlers by importing and calling initMcpServer ─────────────
 
 beforeAll(async () => {
-  const { createMcpServer } = await import('../app/api/mcp/route');
-  createMcpServer();
+  const { initMcpServer } = await import('../app/api/mcp/route');
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  await initMcpServer(server);
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

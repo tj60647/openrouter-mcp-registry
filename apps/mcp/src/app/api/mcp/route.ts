@@ -44,8 +44,8 @@ const verifyToken = async (
   }
 };
 
-const handler = createMcpHandler(
-  async (server) => {
+/** Exported for testing: registers all tools, resources, and prompts on a server instance. */
+export async function initMcpServer(server: import('@modelcontextprotocol/sdk/server/mcp.js').McpServer): Promise<void> {
 
   // Tool: list_models
   server.tool(
@@ -576,8 +576,11 @@ Steps:
     }
   );
 
-  },
-  { name: 'openrouter-mcp-registry', version: '1.0.0' },
+}
+
+const handler = createMcpHandler(
+  initMcpServer,
+  { serverInfo: { name: 'openrouter-mcp-registry', version: '1.0.0' } },
   { basePath: '/api', maxDuration: 60 },
 );
 
