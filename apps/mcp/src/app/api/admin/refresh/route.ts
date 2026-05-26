@@ -30,13 +30,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const syncService = new ModelSyncService(provider, repository);
 
     logger.info('Manual refresh triggered', { force: parsed.data.force });
+    const syncStart = Date.now();
     const result = await syncService.sync({ force: parsed.data.force });
+    logger.info('Manual refresh completed', { durationMs: Date.now() - syncStart, result });
 
     // Generate embeddings for any models that now have a description but no vector yet.
     // Uses OPENROUTER_API_KEY (already required above) to call openai/text-embedding-3-small via OpenRouter.
     if (result.success) {
+      const embStart = Date.now();
       const embeddingsGenerated = await generatePendingEmbeddings(apiKey);
-      logger.info('Embeddings generated', { embeddingsGenerated });
+      logger.info('Embeddings generated', { embeddingsGenerated, durationMs: Date.now() - embStart });
       return NextResponse.json({ ...result, embeddingsGenerated });
     }
 

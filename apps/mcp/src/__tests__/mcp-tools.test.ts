@@ -132,7 +132,7 @@ function parseResult(result: ToolResult): unknown {
 // ── Populate tool handlers by calling createMcpServer ────────────────────────
 
 beforeAll(async () => {
-  const { createMcpServer } = await import('../app/api/mcp/route');
+  const { createMcpServer } = await import('../lib/mcpServer');
   createMcpServer();
 });
 

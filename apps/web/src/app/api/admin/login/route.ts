@@ -1,8 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createSessionToken, SESSION_COOKIE } from '../../../../lib/session';
+import { checkRateLimit } from '../../../../lib/rateLimit';
 
 export const runtime = 'nodejs';
+
+// 5 login attempts per 15 minutes per IP — brute-force protection.
+const LOGIN_RATE_LIMIT = { limit: 5, windowMs: 15 * 60_000 };
 
 function safeEqualString(left: string, right: string): boolean {
   const provided = Buffer.from(left);
@@ -11,6 +15,11 @@ function safeEqualString(left: string, right: string): boolean {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  if (!checkRateLimit(`login:${ip}`, LOGIN_RATE_LIMIT)) {
+    return NextResponse.json({ error: 'Too many login attempts. Try again later.' }, { status: 429 });
+  }
+
   try {
     const body = (await req.json().catch(() => ({}))) as {
       username?: unknown;

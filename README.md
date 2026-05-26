@@ -230,7 +230,7 @@ In **Settings → Environment Variables**:
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | ✅ | Your [OpenRouter](https://openrouter.ai) API key — used for model fetching and generating description embeddings |
 | `ADMIN_SECRET` | ✅ | Random secret for admin endpoints |
-| `MCP_API_KEY` | ❌ | Token to protect the MCP endpoint (open if unset) |
+| `MCP_API_KEY` | ✅ in production | Bearer token to protect the `/api/mcp` endpoint. **Required in production** — the endpoint returns `503` when this is not set and `NODE_ENV=production`. Generate with `openssl rand -hex 32`. |
 
 #### 4. Run database migrations
 
@@ -250,6 +250,8 @@ pnpm db:seed
 #### 5. Cron job
 
 `apps/mcp/vercel.json` configures a weekly cron at `0 0 * * 0` (Sundays midnight UTC) that calls `/api/cron/sync`. Vercel automatically provides `CRON_SECRET` and sends it as a Bearer token — no additional setup needed.
+
+> **Note:** In production, `CRON_SECRET` **must** be set. The cron route returns `503` when the secret is missing and `NODE_ENV=production`. Vercel injects this automatically when you use the Neon integration; if you manage the environment manually, set it to a random secret (e.g. `openssl rand -hex 32`).
 
 ---
 
@@ -278,10 +280,22 @@ You can either:
 | `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
 | `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
-| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `google/gemini-3-flash-preview`) |
+| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `google/gemini-3-flash-preview`). Must match the format `provider/model-name`. |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 
-`CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`).
+`CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`). In production it must be set — the cron route returns `503` otherwise.
+
+#### Rate limits
+
+The following server-side limits are enforced per-IP (per Vercel function instance):
+
+| Endpoint | Limit | Window |
+|----------|-------|--------|
+| `POST /api/admin/login` | 5 requests | 15 minutes |
+| `POST /api/chat` | 20 requests | 1 minute |
+| `POST /api/mcp` | 120 requests | 1 minute |
+
+Requests that exceed the limit receive a `429 Too Many Requests` response.
 
 ---
 
