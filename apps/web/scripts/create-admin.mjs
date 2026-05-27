@@ -98,12 +98,13 @@ async function createAdmin() {
       updated_at = NOW()
   `;
 
-  console.log(`Admin user "${username}" created or updated.`);
+  console.log('Admin user created or updated.');
 }
 
 createAdmin()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error('Create admin failed:', err);
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`Create admin failed: ${message}`);
     process.exit(1);
   });
