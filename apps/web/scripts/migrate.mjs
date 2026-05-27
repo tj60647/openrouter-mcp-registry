@@ -180,6 +180,21 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS aliases_model_id_idx ON aliases(model_id)
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS admins (
+      id BIGSERIAL PRIMARY KEY,
+      username TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS admins_username_idx ON admins(username)
+  `;
+
   console.log('Migrations complete.');
 }
 

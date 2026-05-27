@@ -14,6 +14,7 @@
     "test": "npx -y pnpm -r test",
     "db:migrate": "npx -y pnpm --filter @openrouter-mcp/web db:migrate",
     "db:seed": "npx -y pnpm --filter @openrouter-mcp/web db:seed",
+    "db:create-admin": "npx -y pnpm --filter @openrouter-mcp/web db:create-admin",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore"
   },
   "devDependencies": {

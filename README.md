@@ -89,7 +89,7 @@ Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backen
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/chat` | Agent config — default model, available models, and MCP tools list |
 | `POST` | `/api/chat` | Chatbot — LLM + tool calls routed through MCP |
-| `POST` | `/api/admin/login` | Authenticate admin; issues session cookie (requires `ADMIN_SECRET`, optional `ADMIN_USERNAME`) |
+| `POST` | `/api/admin/login` | Authenticate admin from the `admins` table; issues session cookie |
 | `POST` | `/api/admin/logout` | Clear admin session cookie |
 | `POST` | `/api/admin/refresh` | Trigger manual sync (requires active admin session) |
 | `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
@@ -275,8 +275,7 @@ You can either:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key (used by the `/demo` chatbot) |
-| `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project |
-| `ADMIN_USERNAME` | ❌ | Admin login username for `/admin/login` (defaults to `admin`) |
+| `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project; used by the web app when proxying admin refresh requests |
 | `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
 | `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
@@ -284,6 +283,16 @@ You can either:
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
 
 `CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`). In production it must be set — the cron route returns `503` otherwise.
+
+#### 4. Bootstrap the first web admin
+
+After `pnpm db:migrate`, create the first login account in Postgres:
+
+```bash
+ADMIN_BOOTSTRAP_PASSWORD=choose-a-strong-password pnpm db:create-admin -- --username admin
+```
+
+This upserts an active admin row in the `admins` table. The web login no longer reads admin credentials from environment variables.
 
 #### Rate limits
 
@@ -559,8 +568,7 @@ Tests cover:
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | ✅ | OpenRouter API key (used by the `/demo` chatbot) |
 | `POSTGRES_URL` | ✅ | Same Neon/Postgres connection string as the `mcp` project |
-| `ADMIN_SECRET` | ✅ | Token for admin endpoints |
-| `ADMIN_USERNAME` | ❌ | Admin login username for `/admin/login` (defaults to `admin`) |
+| `ADMIN_SECRET` | ✅ | Token for protected admin endpoints in `apps/mcp`, also used by `apps/web` when proxying refresh requests |
 | `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for signing admin session cookies (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app — chatbot connects here via MCP |
 | `MCP_API_KEY` | ❌ | Bearer token sent to the MCP endpoint (must match `apps/mcp` setting) |
