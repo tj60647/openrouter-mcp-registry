@@ -166,6 +166,20 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS sync_history_synced_at_idx ON sync_history(synced_at DESC)
   `;
 
+  // Alias table — maps short names (e.g. "sonnet") to canonical model IDs.
+  // Created here so that `pnpm db:seed` can insert alias rows without error.
+  await sql`
+    CREATE TABLE IF NOT EXISTS aliases (
+      alias TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL DEFAULT 'system'
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS aliases_model_id_idx ON aliases(model_id)
+  `;
+
   console.log('Migrations complete.');
 }
 
