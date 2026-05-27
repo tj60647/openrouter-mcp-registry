@@ -4,10 +4,12 @@ import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 /**
- * Verify an incoming Bearer token against our self-hosted OAuth AS.
+ * Verify an incoming ****** against our self-hosted OAuth AS.
  *
- * Open mode: when OAUTH_JWT_SECRET is not configured, every connection is
- * accepted with anonymous identity (matches the old MCP_API_KEY=unset behaviour).
+ * When OAUTH_JWT_SECRET is configured, tokens must be valid HS256 JWTs.
+ * When it is not configured:
+ *   - production: fail closed (return undefined → 401)
+ *   - development/test: anonymous access allowed for convenience.
  */
 const verifyToken = async (
   _req: Request,
@@ -15,7 +17,11 @@ const verifyToken = async (
 ): Promise<AuthInfo | undefined> => {
   const jwtSecret = process.env['OAUTH_JWT_SECRET'];
   if (!jwtSecret) {
-    // Open mode — no auth configured.
+    if (process.env['NODE_ENV'] === 'production') {
+      // Fail closed: OAUTH_JWT_SECRET is required in production.
+      return undefined;
+    }
+    // Dev/test convenience: anonymous open access.
     return { token: bearerToken ?? '', clientId: 'anonymous', scopes: ['mcp:read'] };
   }
   if (!bearerToken) return undefined;
