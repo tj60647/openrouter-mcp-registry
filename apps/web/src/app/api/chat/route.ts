@@ -79,11 +79,43 @@ async function fetchAvailableModels(): Promise<string[]> {
 
 // ── MCP helpers ───────────────────────────────────────────────────────────────
 
+/**
+ * Obtain a bearer token for the MCP server via OAuth client credentials.
+ *
+ * Uses MCP_CLIENT_ID + MCP_CLIENT_SECRET to request a short-lived JWT from the
+ * MCP app's token endpoint. Returns null when credentials are not configured,
+ * in which case the connection is made without auth (dev/open mode only).
+ */
+async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
+  const clientId = process.env['MCP_CLIENT_ID'];
+  const clientSecret = process.env['MCP_CLIENT_SECRET'];
+  if (!clientId || !clientSecret) return null;
+
+  try {
+    const tokenUrl = `${mcpUrl.replace(/\/$/,"")}/api/oauth/token`;
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'client_credentials',
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: 'mcp:read',
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { access_token?: string };
+    return data.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Create and connect an MCP client to the registry server. */
 async function connectMcpClient(mcpUrl: string): Promise<Client> {
-  const mcpApiKey = process.env['MCP_API_KEY'];
-  const requestInit: RequestInit = mcpApiKey
-    ? { headers: { Authorization: `Bearer ${mcpApiKey}` } }
+  const bearerToken = await getMcpBearerToken(mcpUrl);
+  const requestInit: RequestInit = bearerToken
+    ? { headers: { Authorization: `Bearer ${bearerToken}` } }
     : {};
 
   let endpoint: URL;

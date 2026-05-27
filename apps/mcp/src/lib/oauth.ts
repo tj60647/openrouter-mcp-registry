@@ -14,6 +14,9 @@ import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 export const OAUTH_AUDIENCE = 'openrouter-mcp-registry';
 export const TOKEN_TTL_SECONDS = 3600; // 1 hour
 
+/** Scopes that may be granted to any client (registered or static). */
+export const ALLOWED_SCOPES = new Set(['mcp:read']);
+
 // ── JWT helpers ────────────────────────────────────────────────────────────────
 
 function getJwtSecretBytes(): Uint8Array {
@@ -47,10 +50,14 @@ export interface AccessTokenClaims extends JWTPayload {
   scope?: string;
 }
 
-/** Verify a JWT access token and return its claims. Throws on invalid/expired tokens. */
+/**
+ * Verify a JWT access token and return its claims.
+ * Throws on invalid/expired tokens or issuer mismatch.
+ */
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
   const { payload } = await jwtVerify<AccessTokenClaims>(token, getJwtSecretBytes(), {
     audience: OAUTH_AUDIENCE,
+    issuer: getIssuerUrl(),
   });
   return payload;
 }
@@ -105,12 +112,21 @@ export function getClient(clientId: string): OAuthClient | null {
 
 /**
  * Register a new dynamic client.
+ * Only scopes listed in ALLOWED_SCOPES are granted; unknown scopes are silently
+ * dropped. Defaults to 'mcp:read' if no valid scope remains after filtering.
+ *
  * Returns the plain-text client secret (shown once; not stored in plain text).
  */
 export function registerDynamicClient(
   clientName: string,
-  scope = 'mcp:read'
-): { clientId: string; clientSecret: string } {
+  requestedScope = 'mcp:read'
+): { clientId: string; clientSecret: string; scope: string } {
+  const scope =
+    requestedScope
+      .split(' ')
+      .filter((s) => ALLOWED_SCOPES.has(s))
+      .join(' ') || 'mcp:read';
+
   const clientId = randomBytes(16).toString('hex');
   const clientSecret = randomBytes(32).toString('base64url');
   _dynamicClients.set(clientId, {
@@ -119,5 +135,5 @@ export function registerDynamicClient(
     clientName,
     scope,
   });
-  return { clientId, clientSecret };
+  return { clientId, clientSecret, scope };
 }

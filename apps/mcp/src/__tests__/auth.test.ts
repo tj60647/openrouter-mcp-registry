@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { validateAdminToken, validateMcpToken } from '../lib/auth';
+import { validateAdminToken } from '../lib/auth';
 
 describe('validateAdminToken', () => {
   beforeEach(() => {
@@ -31,33 +31,13 @@ describe('validateAdminToken', () => {
     const result = validateAdminToken(req);
     expect(result?.status).toBe(401);
   });
-});
 
-describe('validateMcpToken', () => {
-  it('returns null when MCP_API_KEY is not set (open)', () => {
-    delete process.env['MCP_API_KEY'];
-    const req = new NextRequest('http://localhost/api/mcp');
-    const result = validateMcpToken(req);
-    expect(result).toBeNull();
-  });
-
-  it('returns null for valid MCP token', () => {
-    process.env['MCP_API_KEY'] = 'mcp-key';
-    const req = new NextRequest('http://localhost/api/mcp', {
-      headers: { authorization: 'Bearer mcp-key' },
+  it('returns 503 when ADMIN_SECRET is not configured', () => {
+    delete process.env['ADMIN_SECRET'];
+    const req = new NextRequest('http://localhost/api/admin/refresh', {
+      headers: { authorization: 'Bearer any-value' },
     });
-    const result = validateMcpToken(req);
-    delete process.env['MCP_API_KEY'];
-    expect(result).toBeNull();
-  });
-
-  it('returns 401 for invalid MCP token', () => {
-    process.env['MCP_API_KEY'] = 'mcp-key';
-    const req = new NextRequest('http://localhost/api/mcp', {
-      headers: { authorization: 'Bearer wrong' },
-    });
-    const result = validateMcpToken(req);
-    delete process.env['MCP_API_KEY'];
-    expect(result?.status).toBe(401);
+    const result = validateAdminToken(req);
+    expect(result?.status).toBe(503);
   });
 });

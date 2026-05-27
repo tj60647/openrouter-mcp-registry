@@ -24,21 +24,3 @@ export function validateAdminToken(req: NextRequest): NextResponse | null {
   }
   return null;
 }
-
-export function validateMcpToken(req: NextRequest): NextResponse | null {
-  const mcpKey = process.env['MCP_API_KEY'];
-  if (!mcpKey) {
-    // In production the MCP endpoint must be protected — fail closed.
-    // In development/test it may remain open for convenience.
-    if (process.env['NODE_ENV'] === 'production') {
-      return NextResponse.json({ error: 'MCP auth not configured' }, { status: 503 });
-    }
-    return null;
-  }
-
-  const token = req.headers.get('authorization')?.replace('Bearer ', '').trim();
-  if (!token || !safeEqual(token, mcpKey)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  return null;
-}

@@ -6,6 +6,8 @@
  *   - POST body (client_secret_post): application/x-www-form-urlencoded or application/json
  *
  * Returns a short-lived HS256 JWT access token.
+ *
+ * Rate limited: 20 requests per minute per IP.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -15,11 +17,20 @@ import {
   verifyClientSecret,
   TOKEN_TTL_SECONDS,
 } from '../../../../lib/oauth';
+import { checkRateLimit } from '../../../../lib/rateLimit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// 20 token requests per minute per IP — limits credential-stuffing attacks.
+const TOKEN_RATE_LIMIT = { limit: 20, windowMs: 60_000 };
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  if (!checkRateLimit(`oauth:token:${ip}`, TOKEN_RATE_LIMIT)) {
+    return NextResponse.json({ error: 'too_many_requests' }, { status: 429 });
+  }
+
   let grantType: string | undefined;
   let clientId: string | undefined;
   let clientSecret: string | undefined;
