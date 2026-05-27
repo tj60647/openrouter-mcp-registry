@@ -4,7 +4,7 @@ import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 /**
- * Verify an incoming ****** against our self-hosted OAuth AS.
+ * Verify an incoming Bearer token against our self-hosted OAuth AS.
  *
  * Open mode: when OAUTH_JWT_SECRET is not configured, every connection is
  * accepted with anonymous identity (matches the old MCP_API_KEY=unset behaviour).
