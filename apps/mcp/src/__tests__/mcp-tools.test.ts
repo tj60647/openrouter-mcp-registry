@@ -69,13 +69,6 @@ vi.mock('../lib/embeddings', () => ({
   generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...(args as [])),
 }));
 
-// ── Mock Next.js server internals (not needed for tool tests) ─────────────────
-
-vi.mock('../lib/auth', () => ({
-  validateAdminToken: vi.fn().mockReturnValue(null),
-  validateMcpToken: vi.fn().mockReturnValue(null),
-}));
-
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -129,11 +122,13 @@ function parseResult(result: ToolResult): unknown {
   return JSON.parse(text);
 }
 
-// ── Populate tool handlers by calling createMcpServer ────────────────────────
+// ── Populate tool handlers by importing and calling initMcpServer ─────────────
 
 beforeAll(async () => {
-  const { createMcpServer } = await import('../lib/mcpServer');
-  createMcpServer();
+  const { initMcpServer } = await import('../lib/mcp-server');
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  await initMcpServer(server);
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
