@@ -5,7 +5,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const mcpBase = () =>
-  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(
+    /\/+$/,
+    ''
+  );
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   // In production, CRON_SECRET must be configured — fail closed.
