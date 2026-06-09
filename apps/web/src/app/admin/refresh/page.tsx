@@ -46,7 +46,7 @@ export default function AdminRefreshPage() {
         <div>
           <h1>Admin Refresh</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            Manually trigger a model catalog sync from OpenRouter.
+            Manual sync is owned by the MCP backend so apps/web never needs backend provider or admin credentials.
           </p>
         </div>
         <button
@@ -62,11 +62,11 @@ export default function AdminRefreshPage() {
       <div className="card">
         <h3>Manual Refresh</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Trigger a manual sync from OpenRouter.
+          Use the apps/mcp admin endpoint directly from a trusted server context. This web demo intentionally does not proxy admin mutations.
         </p>
         <form className="stack" style={{ marginTop: '1rem' }} onSubmit={handleSubmit}>
           <button type="submit" disabled={refreshing} style={{ maxWidth: 200 }}>
-            {refreshing ? 'Syncing...' : '↻ Trigger Refresh'}
+            {refreshing ? 'Checking...' : '↻ Open MCP-owned refresh'}
           </button>
           {refreshResult && (
             <pre style={{ fontSize: '0.8rem' }}>{refreshResult}</pre>

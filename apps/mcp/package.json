@@ -11,9 +11,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/openai": "3.0.53",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@openrouter-mcp/shared": "workspace:*",
     "@vercel/postgres": "^0.10.0",
+    "ai": "6.0.168",
     "jose": "5.10.0",
     "mcp-handler": "1.1.0",
     "next": "^15.3.1",

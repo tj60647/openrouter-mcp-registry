@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminPassword } from '../../../../lib/adminAuth';
-import { getActiveAdminByUsername } from '../../../../lib/admins';
 import { createSessionToken, SESSION_COOKIE } from '../../../../lib/session';
 import { checkRateLimit } from '../../../../lib/rateLimit';
+import { getMcpAuthHeaders, getMcpBaseUrl } from '../../../../lib/mcpAuth';
 
 export const runtime = 'nodejs';
 
@@ -24,15 +23,30 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const password = typeof body.password === 'string' ? body.password : '';
 
     const sessionSecret = process.env['ADMIN_SESSION_SECRET'];
-    const postgresUrl = process.env['POSTGRES_URL'];
+    const mcpUrl = getMcpBaseUrl();
 
-    if (!sessionSecret || !postgresUrl) {
+    if (!sessionSecret || !mcpUrl) {
       return NextResponse.json({ error: 'Auth not configured' }, { status: 503 });
     }
 
-    const admin = await getActiveAdminByUsername(username);
-    if (!admin || !(await verifyAdminPassword(password, admin.passwordHash))) {
+    let authHeaders: Record<string, string>;
+    try {
+      authHeaders = await getMcpAuthHeaders(mcpUrl);
+    } catch {
+      return NextResponse.json({ error: 'MCP auth not configured' }, { status: 503 });
+    }
+
+    const verifyRes = await fetch(`${mcpUrl}/api/admin/verify-login`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (verifyRes.status === 401) {
       return NextResponse.json({ error: 'Invalid username or password' }, { status: 401 });
+    }
+    if (!verifyRes.ok) {
+      return NextResponse.json({ error: 'Auth not configured' }, { status: 503 });
     }
 
     const token = await createSessionToken(sessionSecret);
@@ -42,7 +56,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       secure: process.env['NODE_ENV'] === 'production',
       sameSite: 'strict',
       path: '/',
-      maxAge: 60 * 60, // 1 hour
+      maxAge: 60 * 60,
     });
     return res;
   } catch {

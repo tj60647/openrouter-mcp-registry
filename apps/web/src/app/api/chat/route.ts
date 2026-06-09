@@ -1,16 +1,13 @@
-import { createOpenAI } from '@ai-sdk/openai';
-import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai';
-import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { UIMessage } from 'ai';
 import { checkRateLimit } from '../../../lib/rateLimit';
+import { getMcpAuthHeaders, getMcpBaseUrl } from '../../../lib/mcpAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // ── Rate-limit config ─────────────────────────────────────────────────────────
-// 20 chat POST requests per minute per IP — each call may spawn multiple LLM
-// round-trips and OpenRouter embedding calls, making it a costly operation.
+// 20 chat POST requests per minute per IP. apps/web only proxies the request;
+// apps/mcp owns the OpenRouter call and registry tool execution.
 const CHAT_RATE_LIMIT = { limit: 20, windowMs: 60_000 };
 
 // ── Payload constraints ───────────────────────────────────────────────────────
@@ -47,9 +44,6 @@ const SYSTEM_PROMPT =
 
 const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'google/gemini-3.5-flash';
 
-function getConfiguredMcpUrl(): string | undefined {
-  return (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'])?.replace(/\/+$/, '');
-}
 
 const AGENT_PARAMETERS = {
   tool_choice: 'auto',
@@ -57,7 +51,6 @@ const AGENT_PARAMETERS = {
   stream: true,
 } as const;
 
-// Fallback list used when the DB is unreachable or has no tool-capable models yet.
 const FALLBACK_MODELS = [
   'openai/gpt-4o-mini',
   'openai/gpt-4o',
@@ -66,125 +59,39 @@ const FALLBACK_MODELS = [
   'meta-llama/llama-3.3-70b-instruct',
 ] as const;
 
-/** Fetch the current list of tool-capable text models from the MCP server, sorted newest-first. */
-async function fetchAvailableModels(): Promise<string[]> {
+// ── MCP proxy helpers ─────────────────────────────────────────────────────────
+
+async function proxyMcpChatConfig(): Promise<Response | null> {
+  const mcpUrl = getMcpBaseUrl();
+  if (!mcpUrl) return null;
+
   try {
-    const mcpBase = getConfiguredMcpUrl() ?? 'http://localhost:3001';
-    const res = await fetch(
-      `${mcpBase}/api/models?toolsOnly=true&availableOnly=true&sortBy=newest&sortDir=desc&limit=20`
-    );
-    const data = (await res.json()) as { models?: Array<{ id: string }> };
-    const ids = (data.models ?? []).map((m) => m.id);
-    // Always include the configured default even if the registry doesn't have it yet.
-    if (!ids.includes(CHAT_MODEL)) ids.unshift(CHAT_MODEL);
-    return ids;
+    const headers = await getMcpAuthHeaders(mcpUrl);
+    const res = await fetch(`${mcpUrl}/api/chat`, { headers });
+    if (!res.ok) return null;
+    const data: unknown = await res.json();
+    return Response.json(data, { status: res.status });
   } catch {
-    const fallback = [...FALLBACK_MODELS] as string[];
-    if (!fallback.includes(CHAT_MODEL)) fallback.unshift(CHAT_MODEL);
-    return fallback;
-  }
-}
-
-// ── MCP helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Obtain a bearer token for the MCP server via OAuth client credentials.
- *
- * Uses MCP_CLIENT_ID + MCP_CLIENT_SECRET to request a short-lived JWT from the
- * MCP app's token endpoint. Returns null when credentials are not configured,
- * in which case the connection is made without auth (dev/open mode only).
- */
-async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
-  const clientId = process.env['MCP_CLIENT_ID'];
-  const clientSecret = process.env['MCP_CLIENT_SECRET'];
-  if (!clientId && !clientSecret) {
-    if (process.env['NODE_ENV'] === 'production') {
-      throw new Error(
-        'MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured for production MCP access.'
-      );
-    }
     return null;
   }
-  if (!clientId || !clientSecret) {
-    throw new Error('Both MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured together.');
-  }
-
-  try {
-    const tokenUrl = `${mcpUrl}/api/oauth/token`;
-    const res = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-        scope: 'mcp:read',
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(
-        `MCP OAuth token request failed with status ${res.status}. Check MCP_CLIENT_ID/MCP_CLIENT_SECRET and OAUTH_JWT_SECRET.`
-      );
-    }
-    const data = (await res.json()) as { access_token?: string };
-    return data.access_token ?? null;
-  } catch (err) {
-    if (err instanceof Error) throw err;
-    throw new Error('MCP OAuth token request failed.');
-  }
-}
-
-/** Create and connect an MCP client to the registry server. */
-async function connectMcpClient(mcpUrl: string): Promise<Client> {
-  const normalizedMcpUrl = mcpUrl.replace(/\/+$/, '');
-  const bearerToken = await getMcpBearerToken(normalizedMcpUrl);
-  const requestInit: RequestInit = bearerToken
-    ? { headers: { Authorization: `Bearer ${bearerToken}` } }
-    : {};
-
-  let endpoint: URL;
-  try {
-    endpoint = new URL(`${normalizedMcpUrl}/api/mcp`);
-  } catch {
-    throw new Error(`MCP_URL is not a valid URL: "${mcpUrl}"`);
-  }
-
-  const client = new Client({ name: 'web-demo', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(endpoint, { requestInit });
-  await client.connect(transport);
-  return client;
 }
 
 // ── GET – agent config ────────────────────────────────────────────────────────
 
 export async function GET(): Promise<Response> {
-  // Fetch tool-capable models and MCP tools concurrently.
-  const [availableModels, mcpTools] = await Promise.all([
-    fetchAvailableModels(),
-    (async (): Promise<Array<{ name: string; description: string }>> => {
-      const mcpUrl = getConfiguredMcpUrl();
-      if (!mcpUrl) return [];
-      const client = await connectMcpClient(mcpUrl).catch(() => null);
-      if (!client) return [];
-      const listed = await client.listTools().catch(() => ({ tools: [] }));
-      await client.close().catch(() => {});
-      return listed.tools.map((t: { name: string; description?: string }) => ({
-        name: t.name,
-        description: t.description ?? '',
-      }));
-    })(),
-  ]);
+  const proxied = await proxyMcpChatConfig();
+  if (proxied) return proxied;
 
   return Response.json({
     model: CHAT_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     parameters: AGENT_PARAMETERS,
-    availableModels,
-    tools: mcpTools,
+    availableModels: [...FALLBACK_MODELS],
+    tools: [],
   });
 }
 
-// ── POST – streaming chat ─────────────────────────────────────────────────────
+// ── POST – streaming chat proxy ──────────────────────────────────────────────
 
 export async function POST(req: Request): Promise<Response> {
   // ── Rate limiting ───────────────────────────────────────────────────────────
@@ -194,14 +101,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Too many requests. Please slow down.' }, { status: 429 });
   }
 
-  // ── Prerequisite checks ─────────────────────────────────────────────────────
-  const apiKey = process.env['OPENROUTER_API_KEY'];
-  if (!apiKey) {
-    return Response.json({ error: 'OPENROUTER_API_KEY is not configured' }, { status: 503 });
-  }
-
-  // MCP_URL (server-side) takes precedence; fall back to the public URL env var
-  const mcpUrl = getConfiguredMcpUrl();
+  const mcpUrl = getMcpBaseUrl();
   if (!mcpUrl) {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
@@ -239,7 +139,6 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
-  // ── Input validation ────────────────────────────────────────────────────────
   const { messages, model: requestedModel, temperature, maxOutputTokens } = parsedBody;
 
   if (!Array.isArray(messages)) {
@@ -282,68 +181,34 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const chatModel = requestedModel ?? CHAT_MODEL;
+  let authHeaders: Record<string, string>;
+  try {
+    authHeaders = await getMcpAuthHeaders(mcpUrl);
+  } catch (err) {
+    console.error('[chat/route] MCP auth failed:', err instanceof Error ? err.message : err);
+    return Response.json({ error: 'Failed to authenticate with the MCP registry server.' }, { status: 502 });
+  }
 
-  const mcpClient = await connectMcpClient(mcpUrl).catch((err: unknown) => {
-    console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
+  const upstream = await fetch(`${mcpUrl}/api/chat`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders,
+      'Content-Type': 'application/json',
+      Accept: req.headers.get('accept') ?? '*/*',
+    },
+    body: JSON.stringify({ messages, model: requestedModel, temperature, maxOutputTokens }),
+  }).catch((err: unknown) => {
+    console.error('[chat/route] MCP chat proxy failed:', err instanceof Error ? err.message : err);
     return null;
   });
-  if (!mcpClient) {
-    return Response.json(
-      { error: 'Failed to connect to the MCP registry server.' },
-      { status: 502 }
-    );
+
+  if (!upstream) {
+    return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
   }
 
-  try {
-    // Discover tools dynamically from the MCP server and bridge them to AI SDK format
-    const { tools: mcpTools } = await mcpClient.listTools();
-
-    const tools: ToolSet = Object.fromEntries(
-      mcpTools.map((t: { name: string; description?: string; inputSchema: unknown }) => [
-        t.name,
-        {
-          description: t.description ?? '',
-          inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
-          execute: async (args: unknown): Promise<string> => {
-            const result = await mcpClient.callTool({
-              name: t.name,
-              arguments: args as Record<string, unknown>,
-            });
-            const text = (result.content as Array<{ type: string; text?: string }>)
-              .filter((c) => c.type === 'text' && typeof c.text === 'string')
-              .map((c) => c.text as string)
-              .join('\n');
-            return text || JSON.stringify(result.content);
-          },
-        },
-      ])
-    );
-
-    const openrouter = createOpenAI({
-      baseURL: 'https://openrouter.ai/api/v1',
-      apiKey,
-      headers: {
-        'HTTP-Referer': process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://localhost',
-      },
-    });
-
-    const result = streamText({
-      model: openrouter.chat(chatModel),
-      system: SYSTEM_PROMPT,
-      messages: await convertToModelMessages(messages),
-      tools,
-      temperature,
-      maxOutputTokens,
-      stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
-      onFinish: async () => {
-        await mcpClient.close().catch(() => {});
-      },
-    });
-
-    return result.toUIMessageStreamResponse();
-  } catch (err) {
-    await mcpClient.close().catch(() => {});
-    throw err;
-  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: upstream.headers,
+  });
 }
