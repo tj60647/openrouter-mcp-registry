@@ -4,7 +4,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@ai-sdk/openai', () => {
   const mockChatFn = vi.fn(() => 'mock-model-instance');
-  const mockProvider = Object.assign(vi.fn(() => 'mock-model-instance'), { chat: mockChatFn });
+  const mockProvider = Object.assign(
+    vi.fn(() => 'mock-model-instance'),
+    { chat: mockChatFn }
+  );
   return {
     createOpenAI: vi.fn(() => mockProvider),
   };
@@ -52,7 +55,7 @@ describe('GET /api/chat', () => {
     const { GET } = await import('../app/api/chat/route');
     const res = await GET();
     expect(res.status).toBe(200);
-    const body = await res.json() as Record<string, unknown>;
+    const body = (await res.json()) as Record<string, unknown>;
     expect(typeof body['model']).toBe('string');
     expect(body['systemPrompt']).toContain('OpenRouter');
     expect(body['parameters']).toBeDefined();
@@ -82,7 +85,7 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain('OPENROUTER_API_KEY');
   });
 
@@ -92,7 +95,7 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain('MCP_URL');
   });
 
@@ -100,7 +103,7 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest('this is not json'));
     expect(res.status).toBe(400);
-    const body = await res.json() as { error: string };
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain('Invalid request body');
   });
 
@@ -109,8 +112,36 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(502);
-    const body = await res.json() as { error: string };
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain('MCP');
+  });
+
+  it('normalizes trailing slashes on MCP_URL before constructing the Streamable HTTP endpoint', async () => {
+    vi.stubEnv('MCP_URL', 'http://localhost:3001/');
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    const { POST } = await import('../app/api/chat/route');
+
+    await POST(makePostRequest({ messages: [] }));
+
+    expect(vi.mocked(StreamableHTTPClientTransport)).toHaveBeenCalledWith(
+      new URL('http://localhost:3001/api/mcp'),
+      expect.any(Object)
+    );
+  });
+
+  it('returns 502 instead of anonymously connecting when production MCP OAuth credentials are missing', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('MCP_CLIENT_ID', '');
+    vi.stubEnv('MCP_CLIENT_SECRET', '');
+    const { POST } = await import('../app/api/chat/route');
+
+    const res = await POST(makePostRequest({ messages: [] }));
+
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('MCP');
+    expect(mockMcpClient.connect).not.toHaveBeenCalled();
   });
 
   it('returns a streaming response for a valid request', async () => {
@@ -162,11 +193,9 @@ describe('POST /api/chat', () => {
     await POST(makePostRequest({ messages: [] }));
 
     const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value;
-    // Default is openai/gpt-4o-mini (or whatever CHAT_MODEL env var resolves to)
+    // Default is CHAT_MODEL (or the route fallback when unset)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((modelFactory as any).chat).toHaveBeenCalledWith(
-      expect.stringContaining('/')
-    );
+    expect((modelFactory as any).chat).toHaveBeenCalledWith(expect.stringContaining('/'));
   });
 
   it('passes MCP tools to streamText when the MCP server returns tools', async () => {
@@ -221,7 +250,9 @@ describe('POST /api/chat', () => {
     const { streamText } = await import('ai');
     vi.mocked(streamText).mockImplementationOnce((opts) => {
       capturedTools = opts.tools as typeof capturedTools;
-      return { toUIMessageStreamResponse: () => new Response('ok', { status: 200 }) } as ReturnType<typeof streamText>;
+      return { toUIMessageStreamResponse: () => new Response('ok', { status: 200 }) } as ReturnType<
+        typeof streamText
+      >;
     });
 
     const { POST } = await import('../app/api/chat/route');

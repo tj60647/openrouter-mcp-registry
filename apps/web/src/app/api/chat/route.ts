@@ -26,7 +26,9 @@ const MODEL_ID_RE = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/;
 function isOversizedTextPart(part: unknown): boolean {
   if (typeof part !== 'object' || part === null) return false;
   const p = part as Record<string, unknown>;
-  return p['type'] === 'text' && typeof p['text'] === 'string' && p['text'].length > MAX_MESSAGE_CHARS;
+  return (
+    p['type'] === 'text' && typeof p['text'] === 'string' && p['text'].length > MAX_MESSAGE_CHARS
+  );
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -44,6 +46,10 @@ const SYSTEM_PROMPT =
   `Be concise and practical.`;
 
 const CHAT_MODEL = process.env['CHAT_MODEL'] ?? 'google/gemini-3.5-flash';
+
+function getConfiguredMcpUrl(): string | undefined {
+  return (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'])?.replace(/\/+$/, '');
+}
 
 const AGENT_PARAMETERS = {
   tool_choice: 'auto',
@@ -63,9 +69,11 @@ const FALLBACK_MODELS = [
 /** Fetch the current list of tool-capable text models from the MCP server, sorted newest-first. */
 async function fetchAvailableModels(): Promise<string[]> {
   try {
-    const mcpBase = (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
-    const res = await fetch(`${mcpBase}/api/models?toolsOnly=true&availableOnly=true&sortBy=newest&sortDir=desc&limit=20`);
-    const data = await res.json() as { models?: Array<{ id: string }> };
+    const mcpBase = getConfiguredMcpUrl() ?? 'http://localhost:3001';
+    const res = await fetch(
+      `${mcpBase}/api/models?toolsOnly=true&availableOnly=true&sortBy=newest&sortDir=desc&limit=20`
+    );
+    const data = (await res.json()) as { models?: Array<{ id: string }> };
     const ids = (data.models ?? []).map((m) => m.id);
     // Always include the configured default even if the registry doesn't have it yet.
     if (!ids.includes(CHAT_MODEL)) ids.unshift(CHAT_MODEL);
@@ -89,10 +97,20 @@ async function fetchAvailableModels(): Promise<string[]> {
 async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
   const clientId = process.env['MCP_CLIENT_ID'];
   const clientSecret = process.env['MCP_CLIENT_SECRET'];
-  if (!clientId || !clientSecret) return null;
+  if (!clientId && !clientSecret) {
+    if (process.env['NODE_ENV'] === 'production') {
+      throw new Error(
+        'MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured for production MCP access.'
+      );
+    }
+    return null;
+  }
+  if (!clientId || !clientSecret) {
+    throw new Error('Both MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured together.');
+  }
 
   try {
-    const tokenUrl = `${mcpUrl.replace(/\/$/,"")}/api/oauth/token`;
+    const tokenUrl = `${mcpUrl}/api/oauth/token`;
     const res = await fetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,24 +121,30 @@ async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
         scope: 'mcp:read',
       }),
     });
-    if (!res.ok) return null;
-    const data = await res.json() as { access_token?: string };
+    if (!res.ok) {
+      throw new Error(
+        `MCP OAuth token request failed with status ${res.status}. Check MCP_CLIENT_ID/MCP_CLIENT_SECRET and OAUTH_JWT_SECRET.`
+      );
+    }
+    const data = (await res.json()) as { access_token?: string };
     return data.access_token ?? null;
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error('MCP OAuth token request failed.');
   }
 }
 
 /** Create and connect an MCP client to the registry server. */
 async function connectMcpClient(mcpUrl: string): Promise<Client> {
-  const bearerToken = await getMcpBearerToken(mcpUrl);
+  const normalizedMcpUrl = mcpUrl.replace(/\/+$/, '');
+  const bearerToken = await getMcpBearerToken(normalizedMcpUrl);
   const requestInit: RequestInit = bearerToken
     ? { headers: { Authorization: `Bearer ${bearerToken}` } }
     : {};
 
   let endpoint: URL;
   try {
-    endpoint = new URL(`${mcpUrl}/api/mcp`);
+    endpoint = new URL(`${normalizedMcpUrl}/api/mcp`);
   } catch {
     throw new Error(`MCP_URL is not a valid URL: "${mcpUrl}"`);
   }
@@ -138,13 +162,16 @@ export async function GET(): Promise<Response> {
   const [availableModels, mcpTools] = await Promise.all([
     fetchAvailableModels(),
     (async (): Promise<Array<{ name: string; description: string }>> => {
-      const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+      const mcpUrl = getConfiguredMcpUrl();
       if (!mcpUrl) return [];
       const client = await connectMcpClient(mcpUrl).catch(() => null);
       if (!client) return [];
       const listed = await client.listTools().catch(() => ({ tools: [] }));
       await client.close().catch(() => {});
-      return listed.tools.map((t: { name: string; description?: string }) => ({ name: t.name, description: t.description ?? '' }));
+      return listed.tools.map((t: { name: string; description?: string }) => ({
+        name: t.name,
+        description: t.description ?? '',
+      }));
     })(),
   ]);
 
@@ -174,7 +201,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // MCP_URL (server-side) takes precedence; fall back to the public URL env var
-  const mcpUrl = process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'];
+  const mcpUrl = getConfiguredMcpUrl();
   if (!mcpUrl) {
     return Response.json({ error: 'MCP_URL is not configured' }, { status: 503 });
   }
@@ -195,9 +222,19 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Request body too large.' }, { status: 413 });
   }
 
-  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
+  let parsedBody: {
+    messages: UIMessage[];
+    model?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+  };
   try {
-    parsedBody = JSON.parse(rawBody) as { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
+    parsedBody = JSON.parse(rawBody) as {
+      messages: UIMessage[];
+      model?: string;
+      temperature?: number;
+      maxOutputTokens?: number;
+    };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
@@ -224,11 +261,25 @@ export async function POST(req: Request): Promise<Response> {
   if (requestedModel !== undefined && !MODEL_ID_RE.test(requestedModel)) {
     return Response.json({ error: 'Invalid model ID.' }, { status: 400 });
   }
-  if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > MAX_TEMPERATURE)) {
-    return Response.json({ error: `temperature must be a number between 0 and ${MAX_TEMPERATURE}.` }, { status: 400 });
+  if (
+    temperature !== undefined &&
+    (typeof temperature !== 'number' || temperature < 0 || temperature > MAX_TEMPERATURE)
+  ) {
+    return Response.json(
+      { error: `temperature must be a number between 0 and ${MAX_TEMPERATURE}.` },
+      { status: 400 }
+    );
   }
-  if (maxOutputTokens !== undefined && (typeof maxOutputTokens !== 'number' || maxOutputTokens < 1 || maxOutputTokens > MAX_OUTPUT_TOKENS)) {
-    return Response.json({ error: `maxOutputTokens must be between 1 and ${MAX_OUTPUT_TOKENS}.` }, { status: 400 });
+  if (
+    maxOutputTokens !== undefined &&
+    (typeof maxOutputTokens !== 'number' ||
+      maxOutputTokens < 1 ||
+      maxOutputTokens > MAX_OUTPUT_TOKENS)
+  ) {
+    return Response.json(
+      { error: `maxOutputTokens must be between 1 and ${MAX_OUTPUT_TOKENS}.` },
+      { status: 400 }
+    );
   }
 
   const chatModel = requestedModel ?? CHAT_MODEL;
@@ -238,7 +289,10 @@ export async function POST(req: Request): Promise<Response> {
     return null;
   });
   if (!mcpClient) {
-    return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
+    return Response.json(
+      { error: 'Failed to connect to the MCP registry server.' },
+      { status: 502 }
+    );
   }
 
   try {

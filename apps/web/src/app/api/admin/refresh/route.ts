@@ -6,7 +6,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const mcpBase = () =>
-  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(
+    /\/+$/,
+    ''
+  );
 
 async function validateAdminSession(req: NextRequest): Promise<NextResponse | null> {
   const sessionSecret = process.env['ADMIN_SESSION_SECRET'];
@@ -45,5 +48,3 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
-
