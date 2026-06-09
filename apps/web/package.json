@@ -14,9 +14,7 @@
     "db:create-admin": "node scripts/create-admin.mjs"
   },
   "dependencies": {
-    "@ai-sdk/openai": "3.0.53",
     "@ai-sdk/react": "3.0.170",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@openrouter-mcp/shared": "workspace:*",
     "@vercel/postgres": "^0.10.0",
     "ai": "6.0.168",

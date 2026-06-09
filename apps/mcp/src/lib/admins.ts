@@ -10,9 +10,7 @@ export interface AdminUser {
 
 export async function getActiveAdminByUsername(username: string): Promise<AdminUser | null> {
   const normalizedUsername = normalizeAdminUsername(username);
-  if (!normalizedUsername) {
-    return null;
-  }
+  if (!normalizedUsername) return null;
 
   const result = await sql`
     SELECT id, username, password_hash, active
@@ -22,22 +20,9 @@ export async function getActiveAdminByUsername(username: string): Promise<AdminU
   `;
 
   const row = result.rows[0] as
-    | {
-        id: number;
-        username: string;
-        password_hash: string;
-        active: boolean;
-      }
+    | { id: number; username: string; password_hash: string; active: boolean }
     | undefined;
+  if (!row) return null;
 
-  if (!row) {
-    return null;
-  }
-
-  return {
-    id: row.id,
-    username: row.username,
-    passwordHash: row.password_hash,
-    active: row.active,
-  };
+  return { id: row.id, username: row.username, passwordHash: row.password_hash, active: row.active };
 }
