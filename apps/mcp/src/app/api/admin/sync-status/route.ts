@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const authError = validateAdminToken(req);
+  const authError = await validateAdminToken(req);
   if (authError) return authError;
 
   try {

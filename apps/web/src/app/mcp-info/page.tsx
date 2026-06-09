@@ -12,9 +12,13 @@ export default function McpInfoPage() {
 
       <div className="card">
         <h2>Endpoint</h2>
-        <pre><code>POST {baseUrl}/api/mcp</code></pre>
+        <pre>
+          <code>POST {baseUrl}/api/mcp</code>
+        </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          If <code>MCP_API_KEY</code> is configured, pass it as a Bearer token in the Authorization header.
+          Production deployments use OAuth bearer tokens. Server-side clients can exchange
+          MCP_CLIENT_ID and MCP_CLIENT_SECRET at /api/oauth/token; never expose those credentials in
+          browser code.
         </p>
       </div>
 
@@ -25,7 +29,8 @@ export default function McpInfoPage() {
             {
               name: 'list_models',
               description: 'List all models in the registry with optional filtering and sorting.',
-              params: '{ limit?: number, offset?: number, provider?: string, query?: string, sortBy?: string, sortDir?: "asc"|"desc", availableOnly?: boolean }',
+              params:
+                '{ limit?: number, offset?: number, provider?: string, query?: string, sortBy?: string, sortDir?: "asc"|"desc", availableOnly?: boolean }',
             },
             {
               name: 'resolve_model',
@@ -40,38 +45,48 @@ export default function McpInfoPage() {
             {
               name: 'search_models',
               description: 'Search models by name, ID, or provider substring',
-              params: '{ query: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
+              params:
+                '{ query: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
             },
             {
               name: 'find_models_by_criteria',
               description: 'Filter models by budget, context, and modality constraints',
-              params: '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, modality?: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
+              params:
+                '{ maxInputPricePer1k?: number, maxOutputPricePer1k?: number, minContextLength?: number, modality?: string, limit?: number, offset?: number, sortBy?: string, sortDir?: "asc"|"desc" }',
             },
             {
               name: 'compare_models',
-              description: 'Compare 2–5 models side-by-side on pricing, context length, and metadata',
+              description:
+                'Compare 2–5 models side-by-side on pricing, context length, and metadata',
               params: '{ ids: string[] }',
             },
             {
               name: 'semantic_search',
-              description: 'Find models by semantic similarity to a natural language description. Powered by openai/text-embedding-3-small via OpenRouter.',
+              description:
+                'Find models by semantic similarity to a natural language description. Powered by openai/text-embedding-3-small via OpenRouter.',
               params: '{ query: string, limit?: number, offset?: number }',
             },
             {
               name: 'get_registry_status',
-              description: 'Get the current sync status of the model registry (last sync time, record count, errors)',
+              description:
+                'Get the current sync status of the model registry (last sync time, record count, errors)',
               params: '{}',
             },
             {
               name: 'get_sync_history',
-              description: 'Get the history of sync attempts (most recent first), including success/failure, record count, and any error messages',
+              description:
+                'Get the history of sync attempts (most recent first), including success/failure, record count, and any error messages',
               params: '{ limit?: number }',
             },
           ].map((tool) => (
             <div key={tool.name} className="card" style={{ background: 'var(--bg)' }}>
               <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{tool.name}</code>
-              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{tool.description}</p>
-              <pre><code>{tool.params}</code></pre>
+              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                {tool.description}
+              </p>
+              <pre>
+                <code>{tool.params}</code>
+              </pre>
             </div>
           ))}
         </div>
@@ -80,7 +95,8 @@ export default function McpInfoPage() {
       <div className="card">
         <h2>Available Resources</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-          Read registry data directly via MCP resource URIs (read-only, accessible via <code>resources/read</code>).
+          Read registry data directly via MCP resource URIs (read-only, accessible via{' '}
+          <code>resources/read</code>).
         </p>
         <div className="stack">
           {[
@@ -94,12 +110,15 @@ export default function McpInfoPage() {
             },
             {
               uri: 'registry://models/{id}',
-              description: 'Details for a specific model — URL-encode the canonical ID (e.g. registry://models/anthropic%2Fclaude-sonnet-4-5)',
+              description:
+                'Details for a specific model — URL-encode the canonical ID (e.g. registry://models/anthropic%2Fclaude-sonnet-4-5)',
             },
           ].map((resource) => (
             <div key={resource.uri} className="card" style={{ background: 'var(--bg)' }}>
               <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{resource.uri}</code>
-              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{resource.description}</p>
+              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                {resource.description}
+              </p>
             </div>
           ))}
         </div>
@@ -108,14 +127,16 @@ export default function McpInfoPage() {
       <div className="card">
         <h2>Available Prompts</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-          Reusable prompt templates that guide model-selection and comparison workflows (accessible via <code>prompts/get</code>).
+          Reusable prompt templates that guide model-selection and comparison workflows (accessible
+          via <code>prompts/get</code>).
         </p>
         <div className="stack">
           {[
             {
               name: 'select_model',
               description: 'Generate a structured prompt to select the best model for a task',
-              params: '{ task_description: string, budget_usd_per_1k_tokens?: string, min_context_length?: string }',
+              params:
+                '{ task_description: string, budget_usd_per_1k_tokens?: string, min_context_length?: string }',
             },
             {
               name: 'compare_models_prompt',
@@ -125,8 +146,12 @@ export default function McpInfoPage() {
           ].map((prompt) => (
             <div key={prompt.name} className="card" style={{ background: 'var(--bg)' }}>
               <code style={{ fontSize: '1rem', color: 'var(--accent)' }}>{prompt.name}</code>
-              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>{prompt.description}</p>
-              <pre><code>{prompt.params}</code></pre>
+              <p style={{ margin: '0.4rem 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                {prompt.description}
+              </p>
+              <pre>
+                <code>{prompt.params}</code>
+              </pre>
             </div>
           ))}
         </div>
@@ -137,41 +162,50 @@ export default function McpInfoPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
           Add this to your Claude Desktop MCP configuration:
         </p>
-        <pre><code>{JSON.stringify(
-          {
-            mcpServers: {
-              'openrouter-registry': {
-                url: `${baseUrl}/api/mcp`,
-                transport: 'streamable-http',
+        <pre>
+          <code>
+            {JSON.stringify(
+              {
+                mcpServers: {
+                  'openrouter-registry': {
+                    url: `${baseUrl}/api/mcp`,
+                    transport: 'streamable-http',
+                  },
+                },
               },
-            },
-          },
-          null,
-          2
-        )}</code></pre>
+              null,
+              2
+            )}
+          </code>
+        </pre>
       </div>
 
       <div className="card">
         <h2>GitHub Copilot (VS Code)</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Add to your workspace{`'`}s <code>.vscode/mcp.json</code> (or under <code>&quot;mcp&quot;</code> in{' '}
-          <code>settings.json</code>):
+          Add to your workspace{`'`}s <code>.vscode/mcp.json</code> (or under{' '}
+          <code>&quot;mcp&quot;</code> in <code>settings.json</code>):
         </p>
-        <pre><code>{JSON.stringify(
-          {
-            servers: {
-              'openrouter-registry': {
-                type: 'http',
-                url: `${baseUrl}/api/mcp`,
+        <pre>
+          <code>
+            {JSON.stringify(
+              {
+                servers: {
+                  'openrouter-registry': {
+                    type: 'http',
+                    url: `${baseUrl}/api/mcp`,
+                  },
+                },
               },
-            },
-          },
-          null,
-          2
-        )}</code></pre>
+              null,
+              2
+            )}
+          </code>
+        </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          If <code>MCP_API_KEY</code> is configured, add a <code>headers</code> object with{' '}
-          <code>{`"Authorization": "Bearer YOUR_MCP_API_KEY"`}</code>.
+          If your client cannot complete OAuth discovery automatically, add a short-lived bearer
+          token in a <code>headers</code> object as{' '}
+          <code>{`"Authorization": "Bearer YOUR_SHORT_LIVED_ACCESS_TOKEN"`}</code>.
         </p>
       </div>
 
@@ -180,9 +214,13 @@ export default function McpInfoPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
           Add to <code>~/.codex/config.toml</code>:
         </p>
-        <pre><code>{`[mcp_servers.openrouter-registry]\nurl = "${baseUrl}/api/mcp"`}</code></pre>
+        <pre>
+          <code>{`[mcp_servers.openrouter-registry]\nurl = "${baseUrl}/api/mcp"`}</code>
+        </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          If <code>MCP_API_KEY</code> is configured, add <code>bearer_token = &quot;YOUR_MCP_API_KEY&quot;</code> on the next line.
+          For authenticated deployments, add{' '}
+          <code>bearer_token = &quot;YOUR_SHORT_LIVED_ACCESS_TOKEN&quot;</code> if your client does
+          not perform OAuth discovery automatically.
         </p>
       </div>
 
@@ -193,78 +231,96 @@ export default function McpInfoPage() {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Resolve a model ID in your agent:
             </p>
-            <pre><code>{`// In your agent/assistant:
+            <pre>
+              <code>{`// In your agent/assistant:
 const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
-// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true, model: {...} }`}</code></pre>
+// → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true, model: {...} }`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Search models by name or provider:
             </p>
-            <pre><code>{`const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });`}</code></pre>
+            <pre>
+              <code>{`const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Find models by natural language description:
             </p>
-            <pre><code>{`const results = await mcp.callTool('semantic_search', {
+            <pre>
+              <code>{`const results = await mcp.callTool('semantic_search', {
   query: 'fast cheap summarization model with large context',
   limit: 10,
-});`}</code></pre>
+});`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Filter models by modality (e.g. vision models):
             </p>
-            <pre><code>{`const models = await mcp.callTool('find_models_by_criteria', {
+            <pre>
+              <code>{`const models = await mcp.callTool('find_models_by_criteria', {
   modality: 'text+image',
   limit: 20,
-});`}</code></pre>
+});`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Find models within a budget and context window:
             </p>
-            <pre><code>{`const models = await mcp.callTool('find_models_by_criteria', {
+            <pre>
+              <code>{`const models = await mcp.callTool('find_models_by_criteria', {
   maxInputPricePer1k: 0.005,
   maxOutputPricePer1k: 0.015,
   minContextLength: 32000,
   limit: 20,
-});`}</code></pre>
+});`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Compare models side-by-side:
             </p>
-            <pre><code>{`const comparison = await mcp.callTool('compare_models', {
+            <pre>
+              <code>{`const comparison = await mcp.callTool('compare_models', {
   ids: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5'],
-});`}</code></pre>
+});`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Read the model list as a resource:
             </p>
-            <pre><code>{`const result = await mcp.readResource('registry://models');
-// → { contents: [{ mimeType: 'application/json', text: '{"models":[...]}' }] }`}</code></pre>
+            <pre>
+              <code>{`const result = await mcp.readResource('registry://models');
+// → { contents: [{ mimeType: 'application/json', text: '{"models":[...]}' }] }`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Use the select_model prompt to guide model selection:
             </p>
-            <pre><code>{`const prompt = await mcp.getPrompt('select_model', {
+            <pre>
+              <code>{`const prompt = await mcp.getPrompt('select_model', {
   task_description: 'Summarize long legal documents',
   budget_usd_per_1k_tokens: '0.005',
   min_context_length: '32000',
 });
-// → prompt messages that instruct the model how to pick the best option`}</code></pre>
+// → prompt messages that instruct the model how to pick the best option`}</code>
+            </pre>
           </div>
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
               Use the compare_models_prompt for a structured comparison:
             </p>
-            <pre><code>{`const prompt = await mcp.getPrompt('compare_models_prompt', {
+            <pre>
+              <code>{`const prompt = await mcp.getPrompt('compare_models_prompt', {
   model_ids: 'anthropic/claude-sonnet-4-5,openai/gpt-4o',
-});`}</code></pre>
+});`}</code>
+            </pre>
           </div>
         </div>
       </div>
@@ -274,7 +330,8 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
           The registry is automatically refreshed weekly via Vercel Cron:
         </p>
-        <pre><code>{`// vercel.json
+        <pre>
+          <code>{`// vercel.json
 {
   "crons": [
     {
@@ -282,7 +339,8 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
       "schedule": "0 0 * * 0"
     }
   ]
-}`}</code></pre>
+}`}</code>
+        </pre>
       </div>
     </div>
   );

@@ -4,7 +4,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const mcpBase = () =>
-  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
+  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(
+    /\/+$/,
+    ''
+  );
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {

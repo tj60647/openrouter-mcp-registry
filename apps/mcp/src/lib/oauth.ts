@@ -104,7 +104,7 @@ export function getClient(clientId: string): OAuthClient | null {
       clientId: staticId,
       clientSecretHash: hashClientSecret(staticSecret),
       clientName: 'Built-in service client',
-      scope: 'mcp:read',
+      scope: 'mcp:read admin:write',
     };
   }
   return _dynamicClients.get(clientId) ?? null;

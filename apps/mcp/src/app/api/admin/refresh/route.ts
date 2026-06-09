@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const authError = validateAdminToken(req);
+  const authError = await validateAdminToken(req);
   if (authError) return authError;
 
   try {
@@ -39,7 +39,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (result.success) {
       const embStart = Date.now();
       const embeddingsGenerated = await generatePendingEmbeddings(apiKey);
-      logger.info('Embeddings generated', { embeddingsGenerated, durationMs: Date.now() - embStart });
+      logger.info('Embeddings generated', {
+        embeddingsGenerated,
+        durationMs: Date.now() - embStart,
+      });
       return NextResponse.json({ ...result, embeddingsGenerated });
     }
 

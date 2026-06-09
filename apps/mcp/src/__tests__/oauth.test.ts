@@ -130,7 +130,7 @@ describe('getClient', () => {
     const client = getClient('static-id');
     expect(client).not.toBeNull();
     expect(client?.clientId).toBe('static-id');
-    expect(client?.scope).toBe('mcp:read');
+    expect(client?.scope).toBe('mcp:read admin:write');
   });
 
   it('static client secret verifies correctly', () => {

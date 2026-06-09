@@ -4,11 +4,7 @@ import { randomBytes, scryptSync } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { sql } from '@vercel/postgres';
 
-function loadLocalEnvIfPresent() {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const envPath = path.resolve(__dirname, '..', '.env.local');
-
+function loadLocalEnvFile(envPath) {
   if (!fs.existsSync(envPath)) {
     return;
   }
@@ -41,6 +37,15 @@ function loadLocalEnvIfPresent() {
   }
 }
 
+function loadLocalEnvIfPresent() {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  // Load apps/mcp first so backend-owned POSTGRES_URL is available to script-only commands.
+  // apps/web/.env.local can still override for local experiments if needed.
+  loadLocalEnvFile(path.resolve(__dirname, '..', '..', 'mcp', '.env.local'));
+  loadLocalEnvFile(path.resolve(__dirname, '..', '.env.local'));
+}
+
 function getArgValue(flag) {
   const index = process.argv.indexOf(flag);
   if (index === -1) {
@@ -64,16 +69,13 @@ async function createAdmin() {
   loadLocalEnvIfPresent();
 
   if (!process.env.POSTGRES_URL) {
-    throw new Error('POSTGRES_URL is not set. Add it to apps/web/.env.local or your shell environment.');
+    throw new Error(
+      'POSTGRES_URL is not set. Add it to apps/mcp/.env.local, apps/web/.env.local, or your shell environment.'
+    );
   }
 
-  const rawUsername =
-    getArgValue('--username') ??
-    process.env.ADMIN_BOOTSTRAP_USERNAME ??
-    'admin';
-  const password =
-    getArgValue('--password') ??
-    process.env.ADMIN_BOOTSTRAP_PASSWORD;
+  const rawUsername = getArgValue('--username') ?? process.env.ADMIN_BOOTSTRAP_USERNAME ?? 'admin';
+  const password = getArgValue('--password') ?? process.env.ADMIN_BOOTSTRAP_PASSWORD;
 
   const username = normalizeUsername(rawUsername);
   if (!username) {
@@ -81,9 +83,7 @@ async function createAdmin() {
   }
 
   if (!password) {
-    throw new Error(
-      'Password is required. Pass --password or set ADMIN_BOOTSTRAP_PASSWORD.'
-    );
+    throw new Error('Password is required. Pass --password or set ADMIN_BOOTSTRAP_PASSWORD.');
   }
 
   const passwordHash = hashPassword(password);

@@ -4,16 +4,18 @@
 
 A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **browsable reference web application**. Designed for zero-config deployment on Vercel.
 
-> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`) powered by the MCP. The chatbot connects to `apps/mcp` via the MCP Streamable HTTP protocol, discovers tools dynamically at runtime, and routes every tool call through the MCP server — it does not access the database directly. The rest of the UI (model browser, resolve page) reads Postgres directly as a convenience. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
+> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`) powered by the MCP. The chatbot connects to `apps/mcp` via the MCP Streamable HTTP protocol, discovers tools dynamically at runtime, and routes every tool call through the MCP server. Browser-facing model/resolve pages call `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` does not use Postgres at Vercel runtime; its scripts can use Postgres for migrations/seed/bootstrap. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
 
 ## Why?
 
 AI coding assistants and agents that call LLM APIs directly suffer from:
+
 - **Stale model names** — providers rename, deprecate, or remove models without notice
 - **No abstraction** — every client hardcodes its own model IDs
 - **No catalog** — no single source of truth for what models exist and what they cost
 
 This registry solves all three problems:
+
 - Fetches the live model catalog from OpenRouter weekly (and on-demand)
 - Normalizes model IDs to a canonical form across providers
 - Serves an MCP-compatible endpoint that AI clients can query
@@ -32,7 +34,7 @@ graph TD
         cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
     end
 
-    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI (MCP client + direct DB for browser pages)"]
+    subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI (MCP client + admin UI)"]
         webApp["apps/web\nNext.js · Demo UI + MCP client chatbot"]
     end
 
@@ -42,7 +44,7 @@ graph TD
     shared -.->|shared code| webApp
     mcpApp --> db
     webApp -->|MCP Streamable HTTP /api/mcp| mcpApp
-    webApp -->|same POSTGRES_URL for browser pages| db
+    webApp -->|local/CI migration scripts use POSTGRES_URL| db
     cron -->|weekly sync| openrouter
 ```
 
@@ -56,7 +58,6 @@ openrouter-mcp-registry/
 │   └── web/              Next.js app — Demo UI + MCP-client chatbot ← optional
 ├── packages/
 │   └── shared/           Shared TypeScript — types, services, providers
-├── vercel.json           Cron config for apps/web if deployed from repo root
 └── pnpm-workspace.yaml
 ```
 
@@ -64,35 +65,36 @@ openrouter-mcp-registry/
 
 ## REST API
 
-Both apps expose overlapping REST routes. **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes a read-oriented subset used by its browser UI; both apps connect directly to the same Postgres database.
+Both apps expose REST routes, but **`apps/mcp`** is the canonical backend — prefer it for programmatic access. **`apps/web`** exposes browser-facing route handlers that proxy registry reads/resolution to `apps/mcp`; its direct Postgres access is limited to local/CI migration, seed, and admin-bootstrap scripts.
 
 ### `apps/mcp` routes (full API)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`) |
-| `GET` | `/api/models/:id` | Get model by canonical ID |
-| `POST` | `/api/resolve` | Resolve model ID → canonical model |
-| `GET` | `/api/health` | Health check + sync status summary |
-| `POST` | `/api/admin/refresh` | Trigger manual sync (requires `ADMIN_SECRET`) |
-| `GET` | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`) |
-| `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
-| `POST` | `/api/mcp` | MCP Streamable HTTP endpoint |
+| Method | Path                     | Description                                                          |
+| ------ | ------------------------ | -------------------------------------------------------------------- |
+| `GET`  | `/api/models`            | List cached models (`?limit`, `?offset`, `?provider`, `?query`)      |
+| `GET`  | `/api/models/:id`        | Get model by canonical ID                                            |
+| `POST` | `/api/resolve`           | Resolve model ID → canonical model                                   |
+| `GET`  | `/api/health`            | Health check + sync status summary                                   |
+| `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET` or `admin:write` OAuth) |
+| `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET` or `admin:write` OAuth)    |
+| `GET`  | `/api/cron/sync`         | Weekly cron sync (protected by `CRON_SECRET`)                        |
+| `POST` | `/api/mcp`               | MCP Streamable HTTP endpoint                                         |
+| `GET`  | `/api/chat`              | Demo agent config for `apps/web`; protected by OAuth in production   |
+| `POST` | `/api/chat`              | Demo chatbot backend; owns OpenRouter calls and MCP tool execution   |
 
 ### `apps/web` routes (demo UI)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/models` | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`, `?sortDir`, `?toolsOnly`, `?reasoningOnly`, `?availableOnly`, `?retiredOnly`) |
-| `GET` | `/api/providers` | List distinct provider names |
-| `POST` | `/api/resolve` | Resolve model ID → canonical model |
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/chat` | Agent config — default model, available models, and MCP tools list |
-| `POST` | `/api/chat` | Chatbot — LLM + tool calls routed through MCP |
-| `POST` | `/api/admin/login` | Authenticate admin from the `admins` table; issues session cookie |
-| `POST` | `/api/admin/logout` | Clear admin session cookie |
-| `POST` | `/api/admin/refresh` | Trigger manual sync (requires active admin session) |
-| `GET` | `/api/cron/sync` | Weekly cron sync (protected by `CRON_SECRET`) |
+| Method | Path                 | Description                                                                                                                                              |
+| ------ | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/models`        | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`, `?sortDir`, `?toolsOnly`, `?reasoningOnly`, `?availableOnly`, `?retiredOnly`) |
+| `GET`  | `/api/providers`     | List distinct provider names                                                                                                                             |
+| `POST` | `/api/resolve`       | Resolve model ID → canonical model                                                                                                                       |
+| `GET`  | `/api/health`        | Health check                                                                                                                                             |
+| `GET`  | `/api/chat`          | Agent config — default model, available models, and MCP tools list                                                                                       |
+| `POST` | `/api/chat`          | Chatbot — LLM + tool calls routed through MCP                                                                                                            |
+| `POST` | `/api/admin/login`   | Authenticate admin from the `admins` table; issues session cookie                                                                                        |
+| `POST` | `/api/admin/logout`  | Clear admin session cookie                                                                                                                               |
+| `POST` | `/api/admin/refresh` | Trigger manual sync (requires active admin session)                                                                                                      |
 
 ## MCP Capabilities
 
@@ -100,19 +102,20 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 ### Tools
 
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `list_models` | List all registry models | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly` |
-| `resolve_model` | Resolve and look up a model by ID | `input: string` |
-| `get_model` | Get full details for a model | `id: string` |
-| `search_models` | Search by name, ID, or provider | `query: string`, `limit`, `offset`, `sortBy`, `sortDir` |
-| `find_models_by_criteria` | Filter by budget, context, and modality | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy`, `sortDir` |
-| `compare_models` | Compare 2–5 models side-by-side | `ids: string[]` |
-| `semantic_search` | Find models by natural language similarity | `query: string`, `limit`, `offset` |
-| `get_registry_status` | Current sync state | — |
-| `get_sync_history` | Recent sync attempts with success/error details | `limit` |
+| Tool                      | Description                                     | Parameters                                                                                                          |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `list_models`             | List all registry models                        | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly`                                        |
+| `resolve_model`           | Resolve and look up a model by ID               | `input: string`                                                                                                     |
+| `get_model`               | Get full details for a model                    | `id: string`                                                                                                        |
+| `search_models`           | Search by name, ID, or provider                 | `query: string`, `limit`, `offset`, `sortBy`, `sortDir`                                                             |
+| `find_models_by_criteria` | Filter by budget, context, and modality         | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy`, `sortDir` |
+| `compare_models`          | Compare 2–5 models side-by-side                 | `ids: string[]`                                                                                                     |
+| `semantic_search`         | Find models by natural language similarity      | `query: string`, `limit`, `offset`                                                                                  |
+| `get_registry_status`     | Current sync state                              | —                                                                                                                   |
+| `get_sync_history`        | Recent sync attempts with success/error details | `limit`                                                                                                             |
 
 Model lifecycle semantics:
+
 - `isAvailable = true` means the model was present in the latest OpenRouter sync.
 - `isAvailable = false` means the model is unavailable in the latest registry sync. This is inferred from sync absence and is not always a provider-declared retirement notice.
 - `providerExpirationAt` is the scheduled provider expiry date from OpenRouter when available.
@@ -120,6 +123,7 @@ Model lifecycle semantics:
 - `lastSeenAt` is the most recent successful sync where the model was still present.
 
 Notes:
+
 - The web UI now uses the term "Unavailable" instead of "Retired" because sync absence and provider-declared expiry are distinct states.
 - The `compare_models` MCP tool now includes lifecycle fields such as `providerExpirationAt`, `lastSeenAt`, `retiredAt`, and `isAvailable` in its response.
 
@@ -127,20 +131,20 @@ Notes:
 
 Read-only data accessible via `resources/read`:
 
-| URI | Description |
-|-----|-------------|
-| `registry://models` | Full model list (up to 500) |
-| `registry://status` | Sync status (last sync time, record count, errors) |
-| `registry://models/{id}` | Details for a specific model (URL-encode the ID) |
+| URI                      | Description                                        |
+| ------------------------ | -------------------------------------------------- |
+| `registry://models`      | Full model list (up to 500)                        |
+| `registry://status`      | Sync status (last sync time, record count, errors) |
+| `registry://models/{id}` | Details for a specific model (URL-encode the ID)   |
 
 ### Prompts
 
 Reusable reasoning templates accessible via `prompts/get`:
 
-| Prompt | Description | Parameters |
-|--------|-------------|------------|
-| `select_model` | Guide model selection for a task | `task_description`, `budget_usd_per_1k_tokens?`, `min_context_length?` |
-| `compare_models_prompt` | Guide side-by-side model comparison | `model_ids` (comma-separated) |
+| Prompt                  | Description                         | Parameters                                                             |
+| ----------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
+| `select_model`          | Guide model selection for a task    | `task_description`, `budget_usd_per_1k_tokens?`, `min_context_length?` |
+| `compare_models_prompt` | Guide side-by-side model comparison | `model_ids` (comma-separated)                                          |
 
 ---
 
@@ -165,7 +169,7 @@ pnpm install
 cp apps/mcp/.env.example apps/mcp/.env.local
 cp apps/web/.env.example apps/web/.env.local
 # Edit both .env.local files and fill in the required values
-# (Both apps use the same POSTGRES_URL — point them at the same database)
+# (apps/mcp uses POSTGRES_URL at runtime; apps/web scripts use it for migrations/seed/bootstrap only)
 # For local dev, apps/web/.env.local should have:
 #   MCP_URL=http://localhost:3001   ← points the chatbot at the local MCP server
 
@@ -186,21 +190,21 @@ pnpm dev
 
 ### Available Scripts
 
-| Script | Description |
-|--------|-------------|
-| `pnpm dev` | Start all apps in parallel |
-| `pnpm build` | Build all packages and apps |
-| `pnpm test` | Run all tests |
-| `pnpm typecheck` | TypeScript type check |
-| `pnpm lint` | Lint all packages |
-| `pnpm db:migrate` | Run database migrations |
-| `pnpm db:seed` | Seed demo models |
+| Script            | Description                 |
+| ----------------- | --------------------------- |
+| `pnpm dev`        | Start all apps in parallel  |
+| `pnpm build`      | Build all packages and apps |
+| `pnpm test`       | Run all tests               |
+| `pnpm typecheck`  | TypeScript type check       |
+| `pnpm lint`       | Lint all packages           |
+| `pnpm db:migrate` | Run database migrations     |
+| `pnpm db:seed`    | Seed demo models            |
 
 ---
 
 ## Deployment (Vercel)
 
-There are **two separate Vercel projects** — one for each app. Both share the same Neon Postgres database.
+There are **two separate Vercel projects** — one for each app. `apps/mcp` is the only Vercel runtime that should connect to Neon/Postgres and OpenRouter; `apps/web` calls `apps/mcp` with server-side OAuth client credentials.
 
 > **Minimum viable deployment:** you only need `apps/mcp`. Deploy `apps/web` only if you want the demo UI.
 
@@ -226,15 +230,19 @@ Vercel automatically injects `POSTGRES_URL` and `CRON_SECRET` into the project's
 
 In **Settings → Environment Variables**:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | Your [OpenRouter](https://openrouter.ai) API key — used for model fetching and generating description embeddings |
-| `ADMIN_SECRET` | ✅ | Random secret for admin endpoints |
-| `MCP_API_KEY` | ✅ in production | Bearer token to protect the `/api/mcp` endpoint. **Required in production** — the endpoint returns `503` when this is not set and `NODE_ENV=production`. Generate with `openssl rand -hex 32`. |
+| Variable              | Required         | Description                                                                                                      |
+| --------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`  | ✅               | Your [OpenRouter](https://openrouter.ai) API key — used for model fetching and generating description embeddings |
+| `POSTGRES_URL`        | ✅               | Neon pooled runtime connection string injected by Vercel Storage, or copied from Neon                            |
+| `ADMIN_SECRET`        | ✅               | Random secret for admin endpoints                                                                                |
+| `OAUTH_JWT_SECRET`    | ✅ in production | Signs short-lived JWT access tokens for `/api/mcp`. Generate with `openssl rand -hex 32`.                        |
+| `MCP_CLIENT_ID`       | ✅ for web demo  | Static OAuth client id shared with `apps/web` for the `/demo` chatbot                                            |
+| `MCP_CLIENT_SECRET`   | ✅ for web demo  | Static OAuth client secret shared with `apps/web`; server-side only                                              |
+| `NEXT_PUBLIC_MCP_URL` | ❌               | Public canonical MCP URL; set for custom domains, otherwise `VERCEL_URL` is used                                 |
 
 #### 4. Run database migrations
 
-After the first deploy, run migrations against your Neon database:
+After the first deploy, run migrations against your Neon database. For Vercel preview deployments, point `POSTGRES_URL` at a Neon preview/dev branch, not the production branch:
 
 ```bash
 # Pull the injected env vars locally
@@ -257,34 +265,31 @@ pnpm db:seed
 
 ### Project 2 — `apps/web` (optional demo UI + MCP-client chatbot)
 
-This is a human-facing browser for the registry. The **`/demo` chatbot** connects to `apps/mcp` via the MCP Streamable HTTP protocol — it discovers tools dynamically and routes every tool call through the MCP server, making it a live example of MCP usage. The rest of the UI reads from the same Neon database as `apps/mcp` via a direct Postgres connection.
+This is a human-facing browser for the registry. The **`/demo` chatbot** connects to `apps/mcp` via the MCP Streamable HTTP protocol — it discovers tools dynamically and routes every tool call through the MCP server, making it a live example of MCP usage. Browser-facing registry reads go through `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` does not need Neon/Postgres or OpenRouter at Vercel runtime.
 
 #### 1. Create the Vercel project
 
 1. Import the **same fork** to a second Vercel project
 2. Under **Root Directory**, enter `apps/web`
 
-#### 2. Connect the same database
+#### 2. Do not attach backend secrets to the web project
 
-You can either:
-- **Share the existing integration:** in the Neon integration settings, attach it to the `web` project too (Vercel will inject `POSTGRES_URL` automatically), or
-- **Copy the value manually:** paste the same `POSTGRES_URL` from the `mcp` project into the `web` project's environment variables.
+Do **not** configure `OPENROUTER_API_KEY`, `POSTGRES_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET` in the `apps/web` Vercel runtime. The web project is a UI/proxy boundary and calls `apps/mcp` for backend work.
 
 #### 3. Set environment variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | Same OpenRouter API key (used by the `/demo` chatbot) |
-| `ADMIN_SECRET` | ✅ | Same admin secret as the `mcp` project; used by the web app when proxying admin refresh requests |
-| `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for admin session cookies (`openssl rand -hex 32`) |
-| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — used by the chatbot and displayed in the UI |
-| `MCP_API_KEY` | ❌ | Bearer token for the MCP endpoint (must match the value set in `apps/mcp` if `MCP_API_KEY` is configured there) |
-| `CHAT_MODEL` | ❌ | OpenRouter model ID for the `/demo` chatbot (default: `google/gemini-3-flash-preview`). Must match the format `provider/model-name`. |
-| `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
+| Variable               | Required           | Description                                                                                                                                          |
+| ---------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_URL`  | ❌                 | Public URL of this web app. Browser-visible; must not contain secrets.                                                                               |
+| `NEXT_PUBLIC_MCP_URL`  | ✅                 | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`). Browser-visible; URL only.                                           |
+| `MCP_URL`              | ❌                 | Server-side MCP URL override; useful for local dev (`http://localhost:3001`) or private/internal routing.                                            |
+| `MCP_CLIENT_ID`        | ✅ in preview/prod | Server-side OAuth client id used by web route handlers to obtain MCP access tokens; must match `apps/mcp`.                                           |
+| `MCP_CLIENT_SECRET`    | ✅ in preview/prod | Server-side OAuth client secret used by web route handlers; must match `apps/mcp` and must never be `NEXT_PUBLIC`.                                   |
+| `ADMIN_SESSION_SECRET` | ❌                 | Required only if using the optional `/admin` pages; signs web-owned session cookies. Admin credential validation and mutations happen in `apps/mcp`. |
 
-`CRON_SECRET` is auto-injected by Vercel if you configure a cron for this project as well (see the repo-root `vercel.json`). In production it must be set — the cron route returns `503` otherwise.
+`apps/web` has no cron job and should not need `CRON_SECRET` at runtime.
 
-#### 4. Bootstrap the first web admin
+#### 4. Bootstrap the first admin
 
 After `pnpm db:migrate`, create the first login account in Postgres:
 
@@ -292,17 +297,17 @@ After `pnpm db:migrate`, create the first login account in Postgres:
 ADMIN_BOOTSTRAP_PASSWORD=choose-a-strong-password pnpm db:create-admin -- --username admin
 ```
 
-This upserts an active admin row in the `admins` table. The web login no longer reads admin credentials from environment variables.
+This upserts an active admin row in the `admins` table. `apps/web` forwards login attempts to `apps/mcp`; it does not read admin credentials or connect to Postgres at runtime.
 
 #### Rate limits
 
 The following server-side limits are enforced per-IP (per Vercel function instance):
 
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| `POST /api/admin/login` | 5 requests | 15 minutes |
-| `POST /api/chat` | 20 requests | 1 minute |
-| `POST /api/mcp` | 120 requests | 1 minute |
+| Endpoint                | Limit        | Window     |
+| ----------------------- | ------------ | ---------- |
+| `POST /api/admin/login` | 5 requests   | 15 minutes |
+| `POST /api/chat`        | 20 requests  | 1 minute   |
+| `POST /api/mcp`         | 120 requests | 1 minute   |
 
 Requests that exceed the limit receive a `429 Too Many Requests` response.
 
@@ -310,12 +315,11 @@ Requests that exceed the limit receive a `429 Too Many Requests` response.
 
 ### `vercel.json` reference
 
-| File | Used by | Purpose |
-|------|---------|---------|
+| File                   | Used by                   | Purpose                         |
+| ---------------------- | ------------------------- | ------------------------------- |
 | `apps/mcp/vercel.json` | `apps/mcp` Vercel project | Weekly cron at `/api/cron/sync` |
-| `vercel.json` (repo root) | `apps/web` Vercel project if root dir = repo root | Weekly cron at `/api/cron/sync` for the web app |
 
-Both route files set `export const maxDuration = 60` inline, so no additional function config is needed in `vercel.json`.
+`apps/web` has no Vercel cron and no repo-root `vercel.json` is required for the preferred two-project deployment.
 
 ---
 
@@ -338,9 +342,9 @@ Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_con
 }
 ```
 
-### With API key protection
+### With OAuth bearer tokens
 
-If `MCP_API_KEY` is set:
+In production, `apps/mcp` should have `OAUTH_JWT_SECRET` configured, so `/api/mcp` requires a bearer token with the `mcp:read` scope. Trusted server-side clients can request a short-lived token from `POST /api/oauth/token` with `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET`; browser code must not receive these credentials.
 
 ```json
 {
@@ -349,7 +353,7 @@ If `MCP_API_KEY` is set:
       "url": "https://your-mcp-app.vercel.app/api/mcp",
       "transport": "streamable-http",
       "headers": {
-        "Authorization": "Bearer YOUR_MCP_API_KEY"
+        "Authorization": "Bearer YOUR_SHORT_LIVED_ACCESS_TOKEN"
       }
     }
   }
@@ -371,7 +375,7 @@ Add to your workspace's `.vscode/mcp.json` (or to your user `settings.json` unde
 }
 ```
 
-If `MCP_API_KEY` is set, add a `headers` field:
+If your MCP client cannot complete OAuth discovery automatically, add a short-lived bearer token header:
 
 ```json
 {
@@ -380,7 +384,7 @@ If `MCP_API_KEY` is set, add a `headers` field:
       "type": "http",
       "url": "https://your-mcp-app.vercel.app/api/mcp",
       "headers": {
-        "Authorization": "Bearer YOUR_MCP_API_KEY"
+        "Authorization": "Bearer YOUR_SHORT_LIVED_ACCESS_TOKEN"
       }
     }
   }
@@ -398,12 +402,12 @@ Add to `~/.codex/config.toml`:
 url = "https://your-mcp-app.vercel.app/api/mcp"
 ```
 
-If `MCP_API_KEY` is set:
+For authenticated production MCP deployments, configure a short-lived bearer token if your client does not perform OAuth discovery automatically:
 
 ```toml
 [mcp_servers.openrouter-registry]
 url = "https://your-mcp-app.vercel.app/api/mcp"
-bearer_token = "YOUR_MCP_API_KEY"
+bearer_token = "YOUR_SHORT_LIVED_ACCESS_TOKEN"
 ```
 
 ### Using in an agent
@@ -523,9 +527,9 @@ CREATE TABLE sync_status (
 
 ## Security
 
-- **Admin endpoints** require `Authorization: Bearer <ADMIN_SECRET>` header
-- **MCP endpoint** is open by default; set `MCP_API_KEY` to require Bearer auth
-- **Cron endpoint** is protected by `CRON_SECRET` (injected by Vercel automatically)
+- **Admin endpoints** require either `Authorization: Bearer <ADMIN_SECRET>` on `apps/mcp` or a short-lived OAuth token with `admin:write` scope issued to the trusted `apps/web` service client
+- **MCP endpoint** requires OAuth bearer tokens in production when `OAUTH_JWT_SECRET` is configured; local dev/test may run anonymously when it is unset
+- **Cron endpoint** lives in `apps/mcp` and is protected by `CRON_SECRET` (injected by Vercel automatically)
 - All user inputs validated with [Zod](https://zod.dev)
 - Model IDs treated as opaque strings — LLM reasoning never determines validity
 
@@ -543,39 +547,79 @@ pnpm --filter @openrouter-mcp/mcp test
 ```
 
 Tests cover:
+
 - Model ID canonicalization
 - Model registry resolution logic
 - Sync service (success, lock contention, provider errors)
-- Auth guards (admin token, MCP token)
+- Auth guards (admin token, OAuth token/client credentials, MCP token)
 
 ---
 
 ## Environment Variables Reference
 
-### `apps/mcp`
+`NEXT_PUBLIC_*` variables are browser-visible. They may contain public URLs only; never put provider keys, database URLs, client secrets, OAuth secrets, admin secrets, cron secrets, or passwords in `NEXT_PUBLIC_*`.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key — used for model fetching **and** generating description embeddings (`openai/text-embedding-3-small` via OpenRouter) |
-| `POSTGRES_URL` | ✅ | Neon/Postgres connection string (auto-injected by Vercel) |
-| `ADMIN_SECRET` | ✅ | Token for admin endpoints |
-| `MCP_API_KEY` | ❌ | Token for MCP endpoint (open if unset) |
-| `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
+### `apps/web` local
 
-### `apps/web`
+| Variable               | Required | Description                                                      |
+| ---------------------- | -------- | ---------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_URL`  | ❌       | Public local/web URL, e.g. `http://localhost:3000`.              |
+| `NEXT_PUBLIC_MCP_URL`  | ❌       | Public MCP URL when not using `MCP_URL`. URL only, no secrets.   |
+| `MCP_URL`              | ✅       | Server-side URL for local MCP, usually `http://localhost:3001`.  |
+| `MCP_CLIENT_ID`        | ❌       | Optional locally; required only when local MCP OAuth is enabled. |
+| `MCP_CLIENT_SECRET`    | ❌       | Optional locally; required only when local MCP OAuth is enabled. |
+| `ADMIN_SESSION_SECRET` | ❌       | Required only for local `/admin` pages.                          |
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key (used by the `/demo` chatbot) |
-| `POSTGRES_URL` | ✅ | Same Neon/Postgres connection string as the `mcp` project |
-| `ADMIN_SECRET` | ✅ | Token for protected admin endpoints in `apps/mcp`, also used by `apps/web` when proxying refresh requests |
-| `ADMIN_SESSION_SECRET` | ✅ | Random 32-byte hex secret for signing admin session cookies (`openssl rand -hex 32`) |
-| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of your deployed `mcp` app — chatbot connects here via MCP |
-| `MCP_API_KEY` | ❌ | Bearer token sent to the MCP endpoint (must match `apps/mcp` setting) |
-| `MCP_URL` | ❌ | Server-side MCP URL (overrides `NEXT_PUBLIC_MCP_URL`; useful for local dev where MCP runs on a different port) |
-| `CHAT_MODEL` | ❌ | OpenRouter model ID for the chatbot (default: `google/gemini-3-flash-preview`) |
-| `NEXT_PUBLIC_APP_URL` | ❌ | Public URL of this web app |
-| `CRON_SECRET` | ❌ | Vercel cron auth (auto-injected by Vercel) |
+### `apps/web` Vercel preview/production
+
+| Variable               | Required           | Description                                                                |
+| ---------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_URL`  | ❌                 | Public web app URL. Browser-visible; URL only.                             |
+| `NEXT_PUBLIC_MCP_URL`  | ✅                 | Public `apps/mcp` URL. Browser-visible; URL only.                          |
+| `MCP_URL`              | ❌                 | Server-side MCP URL override if different from `NEXT_PUBLIC_MCP_URL`.      |
+| `MCP_CLIENT_ID`        | ✅ in preview/prod | Server-side OAuth client id used by web route handlers to call `apps/mcp`. |
+| `MCP_CLIENT_SECRET`    | ✅ in preview/prod | Server-side OAuth client secret used by web route handlers; never public.  |
+| `ADMIN_SESSION_SECRET` | ❌                 | Required only if deploying the optional `/admin` pages.                    |
+
+`apps/web` Vercel runtime does **not** require `OPENROUTER_API_KEY`, `POSTGRES_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET`.
+
+### `apps/mcp` local
+
+| Variable                    | Required | Description                                                                 |
+| --------------------------- | -------- | --------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`        | ✅       | OpenRouter API key for chat, sync, provider access, and embeddings.         |
+| `POSTGRES_URL`              | ✅       | Neon/local Postgres runtime connection string.                              |
+| `ADMIN_SECRET`              | ❌       | Optional local direct admin bearer secret.                                  |
+| `OAUTH_JWT_SECRET`          | ❌       | Optional locally; leave unset for anonymous local MCP convenience.          |
+| `MCP_CLIENT_ID`             | ❌       | Required locally only if OAuth is enabled and `apps/web` must authenticate. |
+| `MCP_CLIENT_SECRET`         | ❌       | Required locally only if OAuth is enabled and `apps/web` must authenticate. |
+| `NEXT_PUBLIC_MCP_URL`       | ❌       | Public canonical MCP URL. URL only.                                         |
+| `OAUTH_ENABLE_REGISTRATION` | ❌       | Leave unset unless intentionally testing dynamic client registration.       |
+| `CRON_SECRET`               | ❌       | Optional local cron bearer secret.                                          |
+| `CHAT_MODEL`                | ❌       | Backend chat model override.                                                |
+
+### `apps/mcp` Vercel preview/production
+
+| Variable                    | Required         | Description                                                                                                                      |
+| --------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`        | ✅               | OpenRouter API key; `apps/mcp` is the only runtime owner.                                                                        |
+| `POSTGRES_URL`              | ✅               | Neon pooled runtime connection string. Use a Neon preview/dev branch for Vercel previews; production branch for production only. |
+| `ADMIN_SECRET`              | ✅               | Direct backend admin bearer secret. Keep in `apps/mcp` only.                                                                     |
+| `OAUTH_JWT_SECRET`          | ✅ in production | Signs short-lived OAuth/JWT access tokens. Keep in `apps/mcp` only.                                                              |
+| `MCP_CLIENT_ID`             | ✅ for web demo  | Static OAuth client id shared with `apps/web`.                                                                                   |
+| `MCP_CLIENT_SECRET`         | ✅ for web demo  | Static OAuth client secret shared with `apps/web`; server-side only.                                                             |
+| `NEXT_PUBLIC_MCP_URL`       | ❌               | Public canonical MCP URL for custom domains. URL only.                                                                           |
+| `OAUTH_ENABLE_REGISTRATION` | ❌               | Leave unset in production unless intentionally allowing dynamic client registration.                                             |
+| `CRON_SECRET`               | ✅ if cron runs  | Vercel cron auth. Required when cron route is deployed.                                                                          |
+| `CHAT_MODEL`                | ❌               | Backend chat model override.                                                                                                     |
+
+### Local/CI script-only
+
+| Variable                   | Required | Description                                                              |
+| -------------------------- | -------- | ------------------------------------------------------------------------ |
+| `POSTGRES_URL`             | ✅       | Used by `pnpm db:migrate`, `pnpm db:seed`, and `pnpm db:create-admin`.   |
+| `ADMIN_BOOTSTRAP_USERNAME` | ❌       | Optional username for `pnpm db:create-admin`.                            |
+| `ADMIN_BOOTSTRAP_PASSWORD` | ✅       | One-time bootstrap password for `pnpm db:create-admin`; never commit it. |
 
 ---
 

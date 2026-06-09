@@ -1,89 +1,83 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// ── Mocks ─────────────────────────────────────────────────────────────────────
-
-vi.mock('@ai-sdk/openai', () => {
-  const mockChatFn = vi.fn(() => 'mock-model-instance');
-  const mockProvider = Object.assign(vi.fn(() => 'mock-model-instance'), { chat: mockChatFn });
-  return {
-    createOpenAI: vi.fn(() => mockProvider),
-  };
-});
-
-vi.mock('ai', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('ai')>();
-  return {
-    ...mod,
-    streamText: vi.fn(() => ({
-      toUIMessageStreamResponse: () => new Response('streamed', { status: 200 }),
-    })),
-  };
-});
-
-const mockMcpClient = {
-  connect: vi.fn().mockResolvedValue(undefined),
-  close: vi.fn().mockResolvedValue(undefined),
-  listTools: vi.fn().mockResolvedValue({ tools: [] }),
-  callTool: vi.fn(),
-};
-
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
-  Client: vi.fn(() => mockMcpClient),
-}));
-
-vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: vi.fn(),
-}));
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function makePostRequest(body: unknown, contentType = 'application/json') {
+function makePostRequest(body: unknown, init?: RequestInit) {
   return new Request('http://localhost/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': contentType },
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: init?.status ?? 200,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+}
 
 describe('GET /api/chat', () => {
-  it('returns the agent configuration including an empty tools array when MCP is not configured', async () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv('MCP_URL', 'http://localhost:3001');
+    vi.stubEnv('NEXT_PUBLIC_MCP_URL', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('proxies agent configuration from apps/mcp', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        model: 'openai/gpt-4o-mini',
+        systemPrompt: 'OpenRouter registry',
+        parameters: {},
+        availableModels: ['openai/gpt-4o-mini'],
+        tools: [],
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
     const { GET } = await import('../app/api/chat/route');
-    const res = await GET();
+    const res = await GET(new Request('http://localhost/api/chat'));
+
     expect(res.status).toBe(200);
-    const body = await res.json() as Record<string, unknown>;
-    expect(typeof body['model']).toBe('string');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3001/api/chat',
+      expect.objectContaining({ method: 'GET' })
+    );
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body['systemPrompt']).toContain('OpenRouter');
-    expect(body['parameters']).toBeDefined();
-    expect(Array.isArray(body['availableModels'])).toBe(true);
-    expect((body['availableModels'] as string[]).length).toBeGreaterThan(0);
-    // tools is always an array; empty when MCP not configured in this test env
-    expect(Array.isArray(body['tools'])).toBe(true);
   });
 });
 
 describe('POST /api/chat', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubEnv('OPENROUTER_API_KEY', 'test-openrouter-key');
+    vi.resetModules();
     vi.stubEnv('MCP_URL', 'http://localhost:3001');
     vi.stubEnv('NEXT_PUBLIC_MCP_URL', '');
-    mockMcpClient.connect.mockResolvedValue(undefined);
-    mockMcpClient.listTools.mockResolvedValue({ tools: [] });
+    vi.stubEnv('OPENROUTER_API_KEY', '');
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
-  it('returns 503 when OPENROUTER_API_KEY is missing', async () => {
-    vi.stubEnv('OPENROUTER_API_KEY', '');
+  it('does not require OPENROUTER_API_KEY in apps/web runtime', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('streamed', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
-    expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain('OPENROUTER_API_KEY');
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('streamed');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3001/api/chat',
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 
   it('returns 503 when both MCP_URL and NEXT_PUBLIC_MCP_URL are missing', async () => {
@@ -92,147 +86,81 @@ describe('POST /api/chat', () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain('MCP_URL');
   });
 
-  it('returns 400 for a malformed JSON body', async () => {
+  it('normalizes trailing slashes on MCP_URL before proxying to apps/mcp', async () => {
+    vi.stubEnv('MCP_URL', 'http://localhost:3001/');
+    const fetchMock = vi.fn().mockResolvedValue(new Response('streamed', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     const { POST } = await import('../app/api/chat/route');
-    const res = await POST(makePostRequest('this is not json'));
-    expect(res.status).toBe(400);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain('Invalid request body');
+
+    await POST(makePostRequest({ messages: [] }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3001/api/chat',
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 
-  it('returns 502 when the MCP server connection fails', async () => {
-    mockMcpClient.connect.mockRejectedValueOnce(new Error('Connection refused'));
-    const { POST } = await import('../app/api/chat/route');
-    const res = await POST(makePostRequest({ messages: [] }));
-    expect(res.status).toBe(502);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain('MCP');
-  });
+  it('uses MCP_CLIENT_ID and MCP_CLIENT_SECRET server-side in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('MCP_CLIENT_ID', 'web-client');
+    vi.stubEnv('MCP_CLIENT_SECRET', 'web-secret');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'mcp-token' }))
+      .mockResolvedValueOnce(new Response('streamed', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
 
-  it('returns a streaming response for a valid request', async () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
+
     expect(res.status).toBe(200);
-  });
-
-  it('passes temperature and maxOutputTokens to streamText when provided', async () => {
-    const { streamText } = await import('ai');
-    const { POST } = await import('../app/api/chat/route');
-
-    await POST(makePostRequest({ messages: [], temperature: 0.3, maxOutputTokens: 512 }));
-
-    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
-      expect.objectContaining({ temperature: 0.3, maxOutputTokens: 512 })
-    );
-  });
-
-  it('passes undefined temperature and maxOutputTokens when not provided', async () => {
-    const { streamText } = await import('ai');
-    const { POST } = await import('../app/api/chat/route');
-
-    await POST(makePostRequest({ messages: [] }));
-
-    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
-      expect.objectContaining({ temperature: undefined, maxOutputTokens: undefined })
-    );
-  });
-
-  it('uses a client-supplied model when provided in the request body', async () => {
-    const { streamText } = await import('ai');
-    const { POST } = await import('../app/api/chat/route');
-    const { createOpenAI } = await import('@ai-sdk/openai');
-
-    await POST(makePostRequest({ messages: [], model: 'anthropic/claude-sonnet-4-5' }));
-
-    // provider.chat() should have been called with the requested model
-    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((modelFactory as any).chat).toHaveBeenCalledWith('anthropic/claude-sonnet-4-5');
-    expect(streamText).toHaveBeenCalled();
-  });
-
-  it('falls back to the default model when no model is supplied', async () => {
-    const { POST } = await import('../app/api/chat/route');
-    const { createOpenAI } = await import('@ai-sdk/openai');
-
-    await POST(makePostRequest({ messages: [] }));
-
-    const modelFactory = vi.mocked(createOpenAI).mock.results[0]?.value;
-    // Default is openai/gpt-4o-mini (or whatever CHAT_MODEL env var resolves to)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((modelFactory as any).chat).toHaveBeenCalledWith(
-      expect.stringContaining('/')
-    );
-  });
-
-  it('passes MCP tools to streamText when the MCP server returns tools', async () => {
-    // Arrange: MCP server returns one tool
-    mockMcpClient.listTools.mockResolvedValueOnce({
-      tools: [
-        {
-          name: 'list_models',
-          description: 'List available models',
-          inputSchema: {
-            type: 'object',
-            properties: { limit: { type: 'number' } },
-          },
-        },
-      ],
-    });
-
-    const { streamText } = await import('ai');
-    const { POST } = await import('../app/api/chat/route');
-
-    await POST(makePostRequest({ messages: [] }));
-
-    // streamText must have been called with a non-empty tools object
-    expect(vi.mocked(streamText)).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://localhost:3001/api/oauth/token',
       expect.objectContaining({
-        tools: expect.objectContaining({
-          list_models: expect.objectContaining({
-            description: 'List available models',
-            execute: expect.any(Function),
-          }),
-        }),
+        method: 'POST',
+        body: expect.stringContaining('web-secret'),
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://localhost:3001/api/chat',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer mcp-token' }),
       })
     );
   });
 
-  it('tool execute function calls mcpClient.callTool and returns text', async () => {
-    // Arrange: MCP server returns one tool
-    mockMcpClient.listTools.mockResolvedValueOnce({
-      tools: [
-        {
-          name: 'get_model',
-          description: 'Get model by id',
-          inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
-        },
-      ],
-    });
-    mockMcpClient.callTool.mockResolvedValueOnce({
-      content: [{ type: 'text', text: '{"found":true}' }],
-    });
-
-    let capturedTools: Record<string, { execute: (args: unknown) => Promise<string> }> | undefined;
-    const { streamText } = await import('ai');
-    vi.mocked(streamText).mockImplementationOnce((opts) => {
-      capturedTools = opts.tools as typeof capturedTools;
-      return { toUIMessageStreamResponse: () => new Response('ok', { status: 200 }) } as ReturnType<typeof streamText>;
-    });
+  it('returns 502 when production MCP OAuth credentials are missing', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('MCP_CLIENT_ID', '');
+    vi.stubEnv('MCP_CLIENT_SECRET', '');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
 
     const { POST } = await import('../app/api/chat/route');
-    await POST(makePostRequest({ messages: [] }));
+    const res = await POST(makePostRequest({ messages: [] }));
 
-    // Call the captured execute function and verify it proxies to callTool
-    const result = await capturedTools?.['get_model']?.execute({ id: 'openai/gpt-4o' });
-    expect(mockMcpClient.callTool).toHaveBeenCalledWith({
-      name: 'get_model',
-      arguments: { id: 'openai/gpt-4o' },
-    });
-    expect(result).toBe('{"found":true}');
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('MCP');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized bodies before proxying', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(
+      makePostRequest({ messages: [] }, { headers: { 'content-length': String(101 * 1024) } })
+    );
+
+    expect(res.status).toBe(413);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

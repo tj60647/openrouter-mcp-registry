@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySessionToken, SESSION_COOKIE } from '../../../../lib/session';
+import { buildMcpHeaders, getConfiguredMcpUrl } from '../../../../lib/mcpProxy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
-
-const mcpBase = () =>
-  (process.env['MCP_URL'] ?? process.env['NEXT_PUBLIC_MCP_URL'] ?? 'http://localhost:3001').replace(/\/$/, '');
 
 async function validateAdminSession(req: NextRequest): Promise<NextResponse | null> {
   const sessionSecret = process.env['ADMIN_SESSION_SECRET'];
@@ -26,15 +24,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   try {
     const body: unknown = await req.json().catch(() => ({}));
-    const adminSecret = process.env['ADMIN_SECRET'];
-    if (!adminSecret) {
-      return NextResponse.json({ error: 'ADMIN_SECRET not configured' }, { status: 503 });
+    const mcpUrl = getConfiguredMcpUrl();
+    if (!mcpUrl) {
+      return NextResponse.json({ error: 'MCP_URL is not configured' }, { status: 503 });
     }
-    const res = await fetch(`${mcpBase()}/api/admin/refresh`, {
+    const authHeaders = await buildMcpHeaders(mcpUrl, 'admin:write');
+    const res = await fetch(`${mcpUrl}/api/admin/refresh`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminSecret}`,
+        ...authHeaders,
       },
       body: JSON.stringify(body),
     });
@@ -45,5 +44,3 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
-
