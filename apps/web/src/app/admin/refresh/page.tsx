@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -8,7 +8,19 @@ export default function AdminRefreshPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    if (refreshing) {
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [refreshing]);
 
   async function triggerRefresh() {
     setRefreshing(true);
@@ -46,7 +58,7 @@ export default function AdminRefreshPage() {
         <div>
           <h1>Admin Refresh</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            Manual sync is owned by the MCP backend so apps/web never needs backend provider or admin credentials.
+            Manually trigger a model catalog sync from OpenRouter.
           </p>
         </div>
         <button
@@ -62,12 +74,17 @@ export default function AdminRefreshPage() {
       <div className="card">
         <h3>Manual Refresh</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Use the apps/mcp admin endpoint directly from a trusted server context. This web demo intentionally does not proxy admin mutations.
+          Triggers a full sync of the OpenRouter model catalog into the database.
         </p>
         <form className="stack" style={{ marginTop: '1rem' }} onSubmit={handleSubmit}>
           <button type="submit" disabled={refreshing} style={{ maxWidth: 200 }}>
-            {refreshing ? 'Checking...' : '↻ Open MCP-owned refresh'}
+            {refreshing ? `Syncing… ${elapsed}s` : '↻ Trigger sync'}
           </button>
+          {refreshing && (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+              Fetching models from OpenRouter and writing to the database. This usually takes 10–30 seconds.
+            </p>
+          )}
           {refreshResult && (
             <pre style={{ fontSize: '0.8rem' }}>{refreshResult}</pre>
           )}

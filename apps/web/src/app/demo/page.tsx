@@ -3,13 +3,28 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
 import type { TextUIPart, UIMessagePart, UIDataTypes, UITools } from 'ai';
-import { getToolName, isStaticToolUIPart } from 'ai';
+import { getToolName, isStaticToolUIPart, DefaultChatTransport } from 'ai';
 import { Wrench } from 'lucide-react';
 import MarkdownRenderer from '../../components/MarkdownRenderer';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_TOKEN_LIMIT = 128_000;
+
+// Keep the most-recent messages that fit within this byte budget.
+// The server hard-limits at 100 KB; leave headroom for the extra body fields.
+const MAX_HISTORY_BYTES = 80 * 1024;
+
+function trimMessages<T>(messages: T[]): T[] {
+  if (messages.length === 0) return messages;
+  const enc = new TextEncoder();
+  let trimmed = messages;
+  while (trimmed.length > 1) {
+    if (enc.encode(JSON.stringify(trimmed)).length <= MAX_HISTORY_BYTES) break;
+    trimmed = trimmed.slice(1);
+  }
+  return trimmed;
+}
 
 function parseMaxTokens(raw: string): number | undefined {
   const v = parseInt(raw, 10);
@@ -647,7 +662,14 @@ export default function DemoPage() {
     [selectedModel, temperature, maxOutputTokens]
   );
 
-  const { messages, sendMessage, status, error, stop } = useChat();
+  const { messages, sendMessage, status, error, stop } = useChat({
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+      prepareSendMessagesRequest: ({ messages, body }) => ({
+        body: { ...(body ?? {}), messages: trimMessages(messages) },
+      }),
+    }),
+  });
 
   const [input, setInput] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement>(null);

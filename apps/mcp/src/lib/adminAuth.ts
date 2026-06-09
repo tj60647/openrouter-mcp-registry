@@ -8,8 +8,8 @@ export function normalizeAdminUsername(username: string): string {
 }
 
 export async function verifyAdminPassword(password: string, storedHash: string): Promise<boolean> {
-  const [salt, key] = storedHash.split(':');
-  if (!salt || !key) return false;
+  const [prefix, salt, key] = storedHash.split('$');
+  if (prefix !== 'scrypt' || !salt || !key || key.length % 2 !== 0) return false;
 
   const keyBuffer = Buffer.from(key, 'hex');
   const derived = (await scrypt(password, salt, keyBuffer.length)) as Buffer;
