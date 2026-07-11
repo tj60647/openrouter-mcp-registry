@@ -20,7 +20,7 @@ export default function NavBar() {
       <div className="nav-inner">
         <Link href="/" className="brand">
           <RegistryIcon size={22} />
-          MCP Registry
+          Registry MCP
         </Link>
         <ul className="links">
           {links.map((link) => (
