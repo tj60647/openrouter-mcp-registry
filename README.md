@@ -616,7 +616,7 @@ Tests cover:
 | `ADMIN_SECRET` | ✅ | Server-side bearer token for MCP admin mutations. |
 | `CRON_SECRET` | ✅ if cron routes are deployed | Server-side cron bearer token. Vercel can inject this for cron jobs. |
 | `NEXT_PUBLIC_MCP_URL` | ❌ | Public canonical MCP URL for metadata/custom domains. Browser-visible, not a secret. |
-| `OAUTH_ENABLE_REGISTRATION` | ❌ | Dynamic client registration flag; leave unset unless intentionally enabled. |
+| `OAUTH_DISABLE_REGISTRATION` | ❌ | Set to `true` to refuse OAuth dynamic client registration. Registration is enabled by default so interactive MCP clients can complete the authorization-code + PKCE flow. |
 
 ### Local/CI script-only
 

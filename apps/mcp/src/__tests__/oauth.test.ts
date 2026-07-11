@@ -2,13 +2,16 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   signAccessToken,
   verifyAccessToken,
-  getClient,
-  registerDynamicClient,
+  signRefreshToken,
+  verifyRefreshToken,
+  getStaticClient,
   verifyClientSecret,
   hashClientSecret,
   getIssuerUrl,
+  filterScopes,
+  computePkceChallenge,
+  verifyPkceS256,
   OAUTH_AUDIENCE,
-  ALLOWED_SCOPES,
 } from '../lib/oauth';
 
 // ── getIssuerUrl ───────────────────────────────────────────────────────────────
@@ -112,79 +115,99 @@ describe('hashClientSecret / verifyClientSecret', () => {
   });
 });
 
-// ── getClient ─────────────────────────────────────────────────────────────────
+// ── refresh tokens ─────────────────────────────────────────────────────────────
 
-describe('getClient', () => {
+describe('signRefreshToken / verifyRefreshToken', () => {
+  beforeEach(() => {
+    process.env['OAUTH_JWT_SECRET'] = 'test-jwt-secret-at-least-32-bytes-long!!';
+    process.env['NEXT_PUBLIC_MCP_URL'] = 'http://localhost:3001';
+  });
+  afterEach(() => {
+    delete process.env['OAUTH_JWT_SECRET'];
+    delete process.env['NEXT_PUBLIC_MCP_URL'];
+  });
+
+  it('signs and verifies a refresh token', async () => {
+    const token = await signRefreshToken('client-abc', 'mcp:read');
+    const claims = await verifyRefreshToken(token);
+    expect(claims.sub).toBe('client-abc');
+    expect(claims.token_use).toBe('refresh');
+  });
+
+  it('rejects an access token presented as a refresh token', async () => {
+    const access = await signAccessToken('client-abc', 'mcp:read');
+    await expect(verifyRefreshToken(access)).rejects.toThrow();
+  });
+
+  it('rejects a refresh token presented as an access token', async () => {
+    const refresh = await signRefreshToken('client-abc', 'mcp:read');
+    await expect(verifyAccessToken(refresh)).rejects.toThrow();
+  });
+});
+
+// ── getStaticClient ─────────────────────────────────────────────────────────────
+
+describe('getStaticClient', () => {
   afterEach(() => {
     delete process.env['MCP_CLIENT_ID'];
     delete process.env['MCP_CLIENT_SECRET'];
   });
 
-  it('returns null for unknown client', () => {
-    expect(getClient('nonexistent')).toBeNull();
+  it('returns null when env vars not set', () => {
+    expect(getStaticClient()).toBeNull();
   });
 
-  it('returns static client when MCP_CLIENT_ID/SECRET are set', () => {
+  it('returns the static client when MCP_CLIENT_ID/SECRET are set', () => {
     process.env['MCP_CLIENT_ID'] = 'static-id';
     process.env['MCP_CLIENT_SECRET'] = 'static-secret';
-    const client = getClient('static-id');
-    expect(client).not.toBeNull();
+    const client = getStaticClient();
     expect(client?.clientId).toBe('static-id');
     expect(client?.scope).toBe('mcp:read');
+    expect(client?.grantTypes).toContain('client_credentials');
   });
 
   it('static client secret verifies correctly', () => {
     process.env['MCP_CLIENT_ID'] = 'static-id';
     process.env['MCP_CLIENT_SECRET'] = 'static-secret';
-    const client = getClient('static-id')!;
-    expect(verifyClientSecret('static-secret', client.clientSecretHash)).toBe(true);
-    expect(verifyClientSecret('wrong', client.clientSecretHash)).toBe(false);
-  });
-
-  it('returns null for static id when env vars not set', () => {
-    expect(getClient('static-id')).toBeNull();
+    const client = getStaticClient()!;
+    expect(verifyClientSecret('static-secret', client.clientSecretHash!)).toBe(true);
+    expect(verifyClientSecret('wrong', client.clientSecretHash!)).toBe(false);
   });
 });
 
-// ── registerDynamicClient ─────────────────────────────────────────────────────
+// ── filterScopes ─────────────────────────────────────────────────────────────
 
-describe('registerDynamicClient', () => {
-  it('registers a new client and returns unique id + secret', () => {
-    const a = registerDynamicClient('Client A');
-    const b = registerDynamicClient('Client B');
-    expect(a.clientId).not.toBe(b.clientId);
-    expect(a.clientSecret).not.toBe(b.clientSecret);
+describe('filterScopes', () => {
+  it('defaults to mcp:read when undefined', () => {
+    expect(filterScopes(undefined)).toBe('mcp:read');
   });
 
-  it('registered client is retrievable via getClient', () => {
-    const { clientId, clientSecret } = registerDynamicClient('Test Client');
-    const client = getClient(clientId);
-    expect(client).not.toBeNull();
-    expect(verifyClientSecret(clientSecret, client!.clientSecretHash)).toBe(true);
-  });
-
-  it('defaults to mcp:read scope', () => {
-    const { scope } = registerDynamicClient('No scope client');
-    expect(scope).toBe('mcp:read');
-  });
-
-  it('grants only allowed scopes', () => {
-    const { scope } = registerDynamicClient('Client', 'mcp:read mcp:write admin');
-    // Only mcp:read is in ALLOWED_SCOPES
-    const granted = scope.split(' ');
-    for (const s of granted) {
-      expect(ALLOWED_SCOPES.has(s)).toBe(true);
-    }
-    expect(granted).toContain('mcp:read');
+  it('drops disallowed scopes', () => {
+    expect(filterScopes('mcp:read mcp:write admin')).toBe('mcp:read');
   });
 
   it('falls back to mcp:read when all requested scopes are disallowed', () => {
-    const { scope } = registerDynamicClient('Client', 'admin superuser');
-    expect(scope).toBe('mcp:read');
+    expect(filterScopes('admin superuser')).toBe('mcp:read');
+  });
+});
+
+// ── PKCE (RFC 7636) ─────────────────────────────────────────────────────────────
+
+describe('PKCE S256', () => {
+  it('verifies a matching verifier/challenge pair', () => {
+    const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+    const challenge = computePkceChallenge(verifier);
+    expect(verifyPkceS256(verifier, challenge)).toBe(true);
   });
 
-  it('stores client with correct name', () => {
-    const { clientId } = registerDynamicClient('Named Client');
-    expect(getClient(clientId)?.clientName).toBe('Named Client');
+  it('rejects a mismatched verifier', () => {
+    const challenge = computePkceChallenge('the-real-verifier');
+    expect(verifyPkceS256('a-different-verifier', challenge)).toBe(false);
+  });
+
+  it('matches the RFC 7636 reference vector', () => {
+    // Appendix B reference: verifier -> challenge
+    const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+    expect(computePkceChallenge(verifier)).toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
   });
 });

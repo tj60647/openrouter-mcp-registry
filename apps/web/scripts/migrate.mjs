@@ -195,6 +195,42 @@ async function migrate() {
     CREATE UNIQUE INDEX IF NOT EXISTS admins_username_idx ON admins(username)
   `;
 
+  // OAuth 2.1 dynamic clients (RFC 7591). Persistent so registrations survive
+  // across serverless instances and restarts. Public (PKCE) clients have a NULL
+  // secret hash; confidential clients store a stable SHA-256 hash.
+  await sql`
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+      client_id TEXT PRIMARY KEY,
+      client_secret_hash TEXT,
+      client_name TEXT NOT NULL DEFAULT 'Anonymous client',
+      redirect_uris TEXT[] NOT NULL DEFAULT '{}',
+      grant_types TEXT[] NOT NULL DEFAULT ARRAY['authorization_code', 'refresh_token'],
+      token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+      scope TEXT NOT NULL DEFAULT 'mcp:read',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  // OAuth 2.1 authorization codes — short-lived, single-use, PKCE-bound.
+  // Only the SHA-256 hash of the code is stored; the row is deleted on redemption.
+  await sql`
+    CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+      code_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      code_challenge TEXT NOT NULL,
+      code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+      scope TEXT NOT NULL DEFAULT 'mcp:read',
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS oauth_auth_codes_expires_idx
+    ON oauth_authorization_codes(expires_at)
+  `;
+
   console.log('Migrations complete.');
 }
 

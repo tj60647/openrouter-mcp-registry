@@ -1,21 +1,31 @@
 /**
- * OAuth 2.0 Authorization Server helpers for the MCP endpoint.
+ * OAuth 2.1 Authorization Server helpers for the MCP endpoint.
  *
- * Implements the Client Credentials grant (RFC 6749 §4.4) with HS256 JWTs.
- * Static clients are configured via MCP_CLIENT_ID / MCP_CLIENT_SECRET env vars.
- * Dynamic clients registered via /api/oauth/register are stored in-process
- * (suitable for single-instance deployments; swap the Map for a DB-backed store
- * in multi-instance / persistent scenarios).
+ * Pure crypto / JWT layer — no database access, so it stays unit-testable and
+ * free of runtime coupling. Persistence (dynamic clients, authorization codes)
+ * lives in ./oauthStore.
+ *
+ * Supported grants: authorization_code (+ PKCE) and refresh_token for
+ * interactive MCP clients, plus client_credentials for trusted service clients.
  */
 
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
-import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 
 export const OAUTH_AUDIENCE = 'openrouter-registry-mcp';
-export const TOKEN_TTL_SECONDS = 3600; // 1 hour
+export const TOKEN_TTL_SECONDS = 3600; // 1 hour access token
+export const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 /** Scopes that may be granted to any client (registered or static). */
 export const ALLOWED_SCOPES = new Set(['mcp:read']);
+
+/** Filter a requested scope string down to allowed scopes; default to mcp:read. */
+export function filterScopes(requestedScope: string | undefined): string {
+  const filtered = (requestedScope ?? '')
+    .split(' ')
+    .filter((s) => ALLOWED_SCOPES.has(s));
+  return filtered.length > 0 ? filtered.join(' ') : 'mcp:read';
+}
 
 // ── JWT helpers ────────────────────────────────────────────────────────────────
 
@@ -36,7 +46,7 @@ export function getIssuerUrl(): string {
 
 /** Sign a short-lived access token for the given client ID and scope. */
 export async function signAccessToken(clientId: string, scope: string): Promise<string> {
-  return new SignJWT({ scope })
+  return new SignJWT({ scope, token_use: 'access' })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(clientId)
     .setIssuer(getIssuerUrl())
@@ -46,29 +56,79 @@ export async function signAccessToken(clientId: string, scope: string): Promise<
     .sign(getJwtSecretBytes());
 }
 
+/** Sign a long-lived refresh token. Distinguished from access tokens by token_use. */
+export async function signRefreshToken(clientId: string, scope: string): Promise<string> {
+  return new SignJWT({ scope, token_use: 'refresh' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(clientId)
+    .setIssuer(getIssuerUrl())
+    .setAudience(OAUTH_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime(`${REFRESH_TOKEN_TTL_SECONDS}s`)
+    .sign(getJwtSecretBytes());
+}
+
 export interface AccessTokenClaims extends JWTPayload {
   scope?: string;
+  token_use?: string;
 }
 
 /**
  * Verify a JWT access token and return its claims.
- * Throws on invalid/expired tokens or issuer mismatch.
+ * Throws on invalid/expired tokens, issuer/audience mismatch, or if the token
+ * is a refresh token being presented as an access token.
  */
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
   const { payload } = await jwtVerify<AccessTokenClaims>(token, getJwtSecretBytes(), {
     audience: OAUTH_AUDIENCE,
     issuer: getIssuerUrl(),
   });
+  if (payload.token_use === 'refresh') {
+    throw new Error('refresh token cannot be used as an access token');
+  }
   return payload;
+}
+
+/** Verify a refresh token and return its claims. Throws unless token_use is 'refresh'. */
+export async function verifyRefreshToken(token: string): Promise<AccessTokenClaims> {
+  const { payload } = await jwtVerify<AccessTokenClaims>(token, getJwtSecretBytes(), {
+    audience: OAUTH_AUDIENCE,
+    issuer: getIssuerUrl(),
+  });
+  if (payload.token_use !== 'refresh') {
+    throw new Error('not a refresh token');
+  }
+  return payload;
+}
+
+// ── PKCE (RFC 7636) ─────────────────────────────────────────────────────────────
+
+function base64url(buf: Buffer): string {
+  return buf.toString('base64url');
+}
+
+/** Compute the S256 code challenge for a verifier: BASE64URL(SHA256(verifier)). */
+export function computePkceChallenge(verifier: string): string {
+  return base64url(createHash('sha256').update(verifier).digest());
+}
+
+/** Constant-time check that a PKCE verifier matches a stored S256 challenge. */
+export function verifyPkceS256(verifier: string, challenge: string): boolean {
+  const computed = computePkceChallenge(verifier);
+  const a = Buffer.from(computed);
+  const b = Buffer.from(challenge);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // ── Client credential hashing ─────────────────────────────────────────────────
 
-// Per-process nonce ensures timing-safe comparisons regardless of secret length.
-const _CLIENT_SECRET_NONCE = randomBytes(32);
-
+/**
+ * Stable hash for client secrets. Client secrets are high-entropy random tokens
+ * (not user passwords), so a fast SHA-256 is appropriate and — unlike a
+ * per-process salt — verifies identically across serverless instances.
+ */
 export function hashClientSecret(secret: string): string {
-  return createHmac('sha256', _CLIENT_SECRET_NONCE).update(secret).digest('hex');
+  return createHash('sha256').update(secret).digest('hex');
 }
 
 export function verifyClientSecret(provided: string, storedHash: string): boolean {
@@ -78,62 +138,56 @@ export function verifyClientSecret(provided: string, storedHash: string): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// ── Client store ───────────────────────────────────────────────────────────────
+// ── Credential generation ───────────────────────────────────────────────────────
+
+export function generateClientId(): string {
+  return randomBytes(16).toString('hex');
+}
+
+export function generateClientSecret(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/** Generate an opaque authorization code (returned to the client, stored hashed). */
+export function generateAuthorizationCode(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/** SHA-256 hash used to store authorization codes at rest. */
+export function hashAuthorizationCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
+
+// ── Client model ────────────────────────────────────────────────────────────────
 
 export interface OAuthClient {
   clientId: string;
-  /** HMAC-SHA256 hash of the plain-text secret (hashed with the per-process nonce). */
-  clientSecretHash: string;
+  /** SHA-256 hash of the secret, or null for public (PKCE-only) clients. */
+  clientSecretHash: string | null;
   clientName: string;
+  redirectUris: string[];
+  grantTypes: string[];
+  tokenEndpointAuthMethod: string;
   /** Space-separated list of granted scopes. */
   scope: string;
 }
 
-/** In-memory dynamic client registry (per-process). */
-const _dynamicClients = new Map<string, OAuthClient>();
-
 /**
- * Look up a client by ID.
- * Checks the static env-configured client first, then any dynamically registered clients.
+ * The static service client configured via MCP_CLIENT_ID / MCP_CLIENT_SECRET.
+ * Used for the client_credentials grant (e.g. apps/web server routes).
+ * Returns null when the env vars are not both set.
  */
-export function getClient(clientId: string): OAuthClient | null {
+export function getStaticClient(): OAuthClient | null {
   const staticId = process.env['MCP_CLIENT_ID'];
   const staticSecret = process.env['MCP_CLIENT_SECRET'];
-  if (staticId && staticSecret && clientId === staticId) {
-    return {
-      clientId: staticId,
-      clientSecretHash: hashClientSecret(staticSecret),
-      clientName: 'Built-in service client',
-      scope: 'mcp:read',
-    };
-  }
-  return _dynamicClients.get(clientId) ?? null;
-}
-
-/**
- * Register a new dynamic client.
- * Only scopes listed in ALLOWED_SCOPES are granted; unknown scopes are silently
- * dropped. Defaults to 'mcp:read' if no valid scope remains after filtering.
- *
- * Returns the plain-text client secret (shown once; not stored in plain text).
- */
-export function registerDynamicClient(
-  clientName: string,
-  requestedScope = 'mcp:read'
-): { clientId: string; clientSecret: string; scope: string } {
-  const scope =
-    requestedScope
-      .split(' ')
-      .filter((s) => ALLOWED_SCOPES.has(s))
-      .join(' ') || 'mcp:read';
-
-  const clientId = randomBytes(16).toString('hex');
-  const clientSecret = randomBytes(32).toString('base64url');
-  _dynamicClients.set(clientId, {
-    clientId,
-    clientSecretHash: hashClientSecret(clientSecret),
-    clientName,
-    scope,
-  });
-  return { clientId, clientSecret, scope };
+  if (!staticId || !staticSecret) return null;
+  return {
+    clientId: staticId,
+    clientSecretHash: hashClientSecret(staticSecret),
+    clientName: 'Built-in service client',
+    redirectUris: [],
+    grantTypes: ['client_credentials'],
+    tokenEndpointAuthMethod: 'client_secret_post',
+    scope: 'mcp:read',
+  };
 }

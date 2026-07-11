@@ -8,23 +8,26 @@ export const dynamic = 'force-dynamic';
  * OAuth 2.0 Authorization Server Metadata (RFC 8414).
  * Required by the MCP specification for OAuth-enabled servers.
  *
- * The registration_endpoint is only advertised when OAUTH_ENABLE_REGISTRATION=true,
- * so that clients do not attempt self-registration on servers that don't support it.
+ * Advertises the authorization-code + PKCE flow (for interactive MCP clients),
+ * refresh_token, and client_credentials (for trusted service clients).
+ * Dynamic client registration is advertised unless explicitly disabled.
  */
 export async function GET(): Promise<NextResponse> {
   const issuer = getIssuerUrl();
-  const registrationEnabled = process.env['OAUTH_ENABLE_REGISTRATION'] === 'true';
+  const registrationDisabled = process.env['OAUTH_DISABLE_REGISTRATION'] === 'true';
 
   const metadata: Record<string, unknown> = {
     issuer,
+    authorization_endpoint: `${issuer}/api/oauth/authorize`,
     token_endpoint: `${issuer}/api/oauth/token`,
-    grant_types_supported: ['client_credentials'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
     scopes_supported: ['mcp:read'],
-    response_types_supported: ['token'],
   };
 
-  if (registrationEnabled) {
+  if (!registrationDisabled) {
     metadata['registration_endpoint'] = `${issuer}/api/oauth/register`;
   }
 
