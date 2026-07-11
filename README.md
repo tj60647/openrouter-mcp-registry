@@ -31,7 +31,7 @@ graph TD
     subgraph mcp_deploy["Vercel Project · apps/mcp  ← deploy this first"]
         mcpApp["apps/mcp\nNext.js · MCP + REST API"]
         db[("Neon Postgres\nmodels · sync_status")]
-        cron["Cron (weekly)\nvia apps/mcp/vercel.json"]
+        cron["Cron (daily)\nvia apps/mcp/vercel.json"]
     end
 
     subgraph web_deploy["Vercel Project · apps/web  ← optional demo UI (MCP client + admin UI)"]
@@ -45,7 +45,7 @@ graph TD
     mcpApp --> db
     webApp -->|MCP Streamable HTTP /api/mcp| mcpApp
     webApp -->|server-side proxy with MCP client credentials| mcpApp
-    cron -->|weekly sync| openrouter
+    cron -->|daily sync| openrouter
 ```
 
 ### Monorepo layout
@@ -79,7 +79,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
 | `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured) |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
-| `GET`  | `/api/cron/sync`         | Weekly cron sync (protected by `CRON_SECRET`)                   |
+| `GET`  | `/api/cron/sync`         | Daily cron sync (protected by `CRON_SECRET`)                    |
 | `POST` | `/api/mcp`               | MCP Streamable HTTP endpoint                                    |
 | `GET`/`POST` | `/api/chat`        | MCP-owned demo chat endpoint; owns OpenRouter call and registry tool execution |
 
@@ -214,7 +214,7 @@ There are **two separate Vercel projects** — one for each app. Both share the 
 
 ### Project 1 — `apps/mcp` (required)
 
-This is the MCP server. It owns the database writes and the weekly cron sync.
+This is the MCP server. It owns the database writes and the daily cron sync.
 
 #### 1. Create the Vercel project
 
@@ -259,9 +259,9 @@ pnpm db:seed
 
 #### 5. Cron job
 
-`apps/mcp/vercel.json` configures a weekly cron at `0 0 * * 0` (Sundays midnight UTC) that calls `/api/cron/sync`. Vercel automatically provides `CRON_SECRET` and sends it as a Bearer token — no additional setup needed.
+`apps/mcp/vercel.json` configures a daily cron at `0 0 * * *` (midnight UTC) that calls `/api/cron/sync`. When `CRON_SECRET` is set on the project, Vercel sends it to the cron invocation as a Bearer token.
 
-> **Note:** In production, `CRON_SECRET` **must** be set. The cron route returns `503` when the secret is missing and `NODE_ENV=production`. Vercel injects this automatically when you use the Neon integration; if you manage the environment manually, set it to a random secret (e.g. `openssl rand -hex 32`).
+> **Note:** You must set `CRON_SECRET` yourself — Vercel does **not** create it automatically (the Neon integration does not provide it). In production the cron route returns `503` ("Cron auth not configured") when the secret is missing and `NODE_ENV=production`, so the job fails on every run until you set it. Generate one with `openssl rand -hex 32`, add it to the project's Production environment, and redeploy so the new deployment picks it up.
 
 ---
 
