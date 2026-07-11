@@ -13,7 +13,7 @@ import { generateEmbedding } from './embeddings';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
-    name: 'openrouter-mcp-registry',
+    name: 'openrouter-registry-mcp',
     version: '1.0.0',
   });
 

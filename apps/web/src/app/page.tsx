@@ -30,7 +30,7 @@ export default function HomePage() {
   return (
     <div className="stack" style={{ gap: '2.5rem', marginTop: '1rem' }}>
       <div>
-        <h1>OpenRouter MCP Registry</h1>
+        <h1>OpenRouter Registry MCP</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', marginBottom: 0 }}>
           A centralized model registry backed by OpenRouter. Prevents stale model names,
           standardizes model IDs, and exposes an MCP-compatible endpoint for AI clients.
@@ -81,7 +81,7 @@ export default function HomePage() {
 
       <div className="card">
         <h2>Architecture</h2>
-        <MermaidDiagram chart={architectureChart} title="OpenRouter MCP registry architecture" />
+        <MermaidDiagram chart={architectureChart} title="OpenRouter Registry MCP architecture" />
       </div>
 
       <div className="grid-2">

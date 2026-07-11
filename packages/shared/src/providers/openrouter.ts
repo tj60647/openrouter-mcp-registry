@@ -16,7 +16,7 @@ export class OpenRouterProvider implements ModelProvider {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'HTTP-Referer': 'https://github.com/tj60647/openrouter-mcp-registry',
-        'X-Title': 'OpenRouter MCP Registry',
+        'X-Title': 'OpenRouter Registry MCP',
       },
       signal: AbortSignal.timeout(30_000),
     });

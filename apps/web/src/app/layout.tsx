@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import NavBar from '../components/NavBar';
 
 export const metadata: Metadata = {
-  title: 'OpenRouter MCP Registry',
+  title: 'OpenRouter Registry MCP',
   description: 'A centralized MCP model registry backed by OpenRouter',
   icons: { icon: '/icon.svg', shortcut: '/icon.svg' },
 };

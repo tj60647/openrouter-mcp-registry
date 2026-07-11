@@ -39,7 +39,7 @@ const verifyToken = async (
 
 const handler = createMcpHandler(
   initMcpServer,
-  { serverInfo: { name: 'openrouter-mcp-registry', version: '1.0.0' } },
+  { serverInfo: { name: 'openrouter-registry-mcp', version: '1.0.0' } },
   { basePath: '/api', maxDuration: 60 },
 );
 

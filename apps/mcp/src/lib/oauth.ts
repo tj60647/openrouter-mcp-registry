@@ -11,7 +11,7 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 
-export const OAUTH_AUDIENCE = 'openrouter-mcp-registry';
+export const OAUTH_AUDIENCE = 'openrouter-registry-mcp';
 export const TOKEN_TTL_SECONDS = 3600; // 1 hour
 
 /** Scopes that may be granted to any client (registered or static). */
