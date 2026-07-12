@@ -40,7 +40,7 @@ export default function AdminLoginPage() {
         const json = (await res.json()) as { error?: string };
         throw new Error(json.error ?? 'Login failed');
       }
-      router.push('/admin/refresh');
+      router.push('/admin');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Login failed');
     } finally {

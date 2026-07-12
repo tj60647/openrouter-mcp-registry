@@ -231,6 +231,22 @@ async function migrate() {
     ON oauth_authorization_codes(expires_at)
   `;
 
+  // Revocation support: a revoked client is rejected at authorize/token time.
+  await sql`ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`;
+
+  // Per-client MCP usage log — one row per tool call, for usage-by-agent reporting.
+  await sql`
+    CREATE TABLE IF NOT EXISTS mcp_usage (
+      id BIGSERIAL PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      tool TEXT NOT NULL,
+      ok BOOLEAN NOT NULL DEFAULT TRUE,
+      called_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS mcp_usage_client_idx ON mcp_usage(client_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS mcp_usage_called_at_idx ON mcp_usage(called_at DESC)`;
+
   console.log('Migrations complete.');
 }
 

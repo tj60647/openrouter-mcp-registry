@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import AdminNav from '../../../components/AdminNav';
 
 export default function AdminRefreshPage() {
   const [refreshing, setRefreshing] = useState(false);
@@ -10,7 +10,6 @@ export default function AdminRefreshPage() {
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const router = useRouter();
 
   useEffect(() => {
     if (refreshing) {
@@ -42,11 +41,6 @@ export default function AdminRefreshPage() {
     }
   }
 
-  async function handleLogout() {
-    await fetch('/api/admin/logout', { method: 'POST' });
-    router.push('/admin/login');
-  }
-
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void triggerRefresh();
@@ -54,19 +48,12 @@ export default function AdminRefreshPage() {
 
   return (
     <div className="stack">
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div>
-          <h1>Admin Refresh</h1>
-          <p style={{ color: 'var(--text-muted)' }}>
-            Manually trigger a model catalog sync from OpenRouter.
-          </p>
-        </div>
-        <button
-          onClick={() => { void handleLogout(); }}
-          style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', marginTop: '0.25rem' }}
-        >
-          Sign out
-        </button>
+      <AdminNav />
+      <div>
+        <h1>Admin Refresh</h1>
+        <p style={{ color: 'var(--text-muted)' }}>
+          Manually trigger a model catalog sync from OpenRouter.
+        </p>
       </div>
 
       {error && <div className="error-msg">{error}</div>}

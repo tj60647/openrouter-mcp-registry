@@ -1,18 +1,42 @@
 /**
- * Session cookie helpers using the Web Crypto API.
- * Works in both Edge (middleware) and Node.js (API routes) runtimes.
+ * Signed admin session tokens, using the Web Crypto API so they work in both
+ * the Edge (middleware) and Node.js (API route) runtimes.
  *
- * Cookie format: `<unix-ms>.<hmac-sha256-hex>`
- * The HMAC is computed over the timestamp string using ADMIN_SESSION_SECRET.
+ * Format: `v2.<base64url(payload)>.<hmac-sha256-hex>`
+ *   payload = { u: username, sid: session id, iat: issued-at ms }
+ *   HMAC is computed over the base64url payload string with ADMIN_SESSION_SECRET.
+ *
+ * Carrying the username + a random session id (vs. the old bare timestamp)
+ * gives the admin UI an identity to display and a handle for future revocation.
  */
 
 export const SESSION_COOKIE = 'admin_session';
-const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+export const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const TOKEN_VERSION = 'v2';
+
+export interface SessionPayload {
+  username: string;
+  sid: string;
+  iat: number;
+}
 
 function toHex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+function base64urlEncode(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64urlDecode(input: string): string {
+  const bin = atob(input.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 async function hmacSign(secret: string, data: string): Promise<string> {
@@ -28,35 +52,56 @@ async function hmacSign(secret: string, data: string): Promise<string> {
   return toHex(sig);
 }
 
-/** Creates a signed session token string to store in the cookie. */
-export async function createSessionToken(secret: string): Promise<string> {
-  const ts = Date.now().toString();
-  const hmac = await hmacSign(secret, ts);
-  return `${ts}.${hmac}`;
+function randomSid(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Creates a signed session token for the given admin username. */
+export async function createSessionToken(secret: string, username: string): Promise<string> {
+  const payload: SessionPayload = { username, sid: randomSid(), iat: Date.now() };
+  const encoded = base64urlEncode(JSON.stringify(payload));
+  const hmac = await hmacSign(secret, encoded);
+  return `${TOKEN_VERSION}.${encoded}.${hmac}`;
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
+  }
+  return diff === 0;
 }
 
 /**
- * Verifies a session token string.
- * Returns false if the HMAC is invalid or the session has expired.
+ * Verifies a session token and returns its payload, or null if the signature is
+ * invalid, the token is malformed, or the session has expired.
  */
-export async function verifySessionToken(token: string, secret: string): Promise<boolean> {
-  const dot = token.indexOf('.');
-  if (dot === -1) return false;
+export async function verifySessionToken(
+  token: string,
+  secret: string,
+): Promise<SessionPayload | null> {
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts[0] !== TOKEN_VERSION) return null;
+  const [, encoded, provided] = parts;
 
-  const ts = token.slice(0, dot);
-  const provided = token.slice(dot + 1);
+  const expected = await hmacSign(secret, encoded);
+  if (!timingSafeStringEqual(expected, provided)) return null;
 
-  const timestamp = Number(ts);
-  if (!Number.isFinite(timestamp)) return false;
-  if (Date.now() - timestamp > SESSION_TTL_MS) return false;
-
-  const expected = await hmacSign(secret, ts);
-
-  // Constant-time comparison over fixed-length hex strings
-  if (expected.length !== provided.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) {
-    diff |= (expected.codePointAt(i) ?? 0) ^ (provided.codePointAt(i) ?? 0);
+  let payload: SessionPayload;
+  try {
+    payload = JSON.parse(base64urlDecode(encoded)) as SessionPayload;
+  } catch {
+    return null;
   }
-  return diff === 0;
+
+  if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat)) return null;
+  if (Date.now() - payload.iat > SESSION_TTL_MS) return null;
+  if (typeof payload.username !== 'string' || !payload.username) return null;
+
+  return payload;
 }

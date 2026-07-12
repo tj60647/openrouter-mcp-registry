@@ -45,7 +45,8 @@ function rowToClient(row: ClientRow): OAuthClient {
 
 /**
  * Look up a client by ID. Checks the static env-configured service client first,
- * then the persistent oauth_clients table.
+ * then the persistent oauth_clients table. Revoked clients are treated as
+ * non-existent so they can no longer obtain tokens.
  */
 export async function findClient(clientId: string): Promise<OAuthClient | null> {
   const staticClient = getStaticClient();
@@ -55,11 +56,60 @@ export async function findClient(clientId: string): Promise<OAuthClient | null> 
     SELECT client_id, client_secret_hash, client_name, redirect_uris,
            grant_types, token_endpoint_auth_method, scope
     FROM oauth_clients
-    WHERE client_id = ${clientId}
+    WHERE client_id = ${clientId} AND revoked_at IS NULL
     LIMIT 1
   `;
   const row = result.rows[0] as ClientRow | undefined;
   return row ? rowToClient(row) : null;
+}
+
+export interface AdminClientView {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  scope: string;
+  tokenEndpointAuthMethod: string;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+/** List all dynamically-registered clients for the admin panel (newest first). */
+export async function listClients(): Promise<AdminClientView[]> {
+  const result = await sql`
+    SELECT client_id, client_name, redirect_uris, scope,
+           token_endpoint_auth_method, created_at, revoked_at
+    FROM oauth_clients
+    ORDER BY created_at DESC
+  `;
+  return result.rows.map((r) => ({
+    clientId: r.client_id as string,
+    clientName: r.client_name as string,
+    redirectUris: (r.redirect_uris as string[]) ?? [],
+    scope: r.scope as string,
+    tokenEndpointAuthMethod: r.token_endpoint_auth_method as string,
+    createdAt: new Date(r.created_at as string).toISOString(),
+    revokedAt: r.revoked_at ? new Date(r.revoked_at as string).toISOString() : null,
+  }));
+}
+
+/** Revoke a client. Returns true if a non-revoked client was revoked. */
+export async function revokeClient(clientId: string): Promise<boolean> {
+  const result = await sql`
+    UPDATE oauth_clients
+    SET revoked_at = NOW()
+    WHERE client_id = ${clientId} AND revoked_at IS NULL
+  `;
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Restore a previously-revoked client. Returns true if one was restored. */
+export async function unrevokeClient(clientId: string): Promise<boolean> {
+  const result = await sql`
+    UPDATE oauth_clients
+    SET revoked_at = NULL
+    WHERE client_id = ${clientId} AND revoked_at IS NOT NULL
+  `;
+  return (result.rowCount ?? 0) > 0;
 }
 
 export interface DynamicClientRegistration {
@@ -181,5 +231,96 @@ export async function consumeAuthorizationCode(
     codeChallengeMethod: row.code_challenge_method,
     scope: row.scope,
     expired: new Date(row.expires_at).getTime() < Date.now(),
+  };
+}
+
+// ── Usage tracking ──────────────────────────────────────────────────────────────
+
+/** Record a single MCP tool call for usage-by-agent reporting. Best-effort. */
+export async function recordUsage(clientId: string, tool: string, ok: boolean): Promise<void> {
+  await sql`
+    INSERT INTO mcp_usage (client_id, tool, ok)
+    VALUES (${clientId}, ${tool}, ${ok})
+  `;
+}
+
+export interface UsageByClient {
+  clientId: string;
+  clientName: string | null;
+  totalCalls: number;
+  errorCalls: number;
+  lastCalledAt: string | null;
+}
+
+export interface UsageByTool {
+  tool: string;
+  totalCalls: number;
+}
+
+export interface UsageReport {
+  totalCalls: number;
+  windowDays: number;
+  byClient: UsageByClient[];
+  byTool: UsageByTool[];
+}
+
+/**
+ * Aggregate usage over the last `windowDays` days. Client names are resolved
+ * from oauth_clients; the built-in service client and unknown ids show a label.
+ */
+export async function getUsageReport(windowDays = 30): Promise<UsageReport> {
+  const staticClient = getStaticClient();
+
+  const byClientRes = await sql`
+    SELECT u.client_id,
+           c.client_name,
+           count(*)::int AS total_calls,
+           count(*) FILTER (WHERE NOT u.ok)::int AS error_calls,
+           max(u.called_at) AS last_called_at
+    FROM mcp_usage u
+    LEFT JOIN oauth_clients c ON c.client_id = u.client_id
+    WHERE u.called_at > NOW() - (${windowDays} || ' days')::interval
+    GROUP BY u.client_id, c.client_name
+    ORDER BY total_calls DESC
+  `;
+
+  const byToolRes = await sql`
+    SELECT tool, count(*)::int AS total_calls
+    FROM mcp_usage
+    WHERE called_at > NOW() - (${windowDays} || ' days')::interval
+    GROUP BY tool
+    ORDER BY total_calls DESC
+  `;
+
+  const totalRes = await sql`
+    SELECT count(*)::int AS n
+    FROM mcp_usage
+    WHERE called_at > NOW() - (${windowDays} || ' days')::interval
+  `;
+
+  const byClient: UsageByClient[] = byClientRes.rows.map((r) => {
+    const clientId = r.client_id as string;
+    let clientName = (r.client_name as string | null) ?? null;
+    if (!clientName) {
+      if (staticClient && clientId === staticClient.clientId) clientName = 'Built-in service client';
+      else if (clientId === 'anonymous') clientName = 'Anonymous (dev)';
+    }
+    return {
+      clientId,
+      clientName,
+      totalCalls: r.total_calls as number,
+      errorCalls: r.error_calls as number,
+      lastCalledAt: r.last_called_at ? new Date(r.last_called_at as string).toISOString() : null,
+    };
+  });
+
+  return {
+    totalCalls: (totalRes.rows[0]?.n as number) ?? 0,
+    windowDays,
+    byClient,
+    byTool: byToolRes.rows.map((r) => ({
+      tool: r.tool as string,
+      totalCalls: r.total_calls as number,
+    })),
   };
 }

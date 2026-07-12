@@ -11,9 +11,49 @@ import {
   semanticSearchModels,
 } from './db';
 import { generateEmbedding } from './embeddings';
+import { recordUsage } from './oauthStore';
+
+/**
+ * Wrap `server.tool` so every tool call records a usage row attributed to the
+ * calling OAuth client (from the request's authInfo). Best-effort: a failed
+ * usage write never affects the tool response. Applied before any tool is
+ * registered so all registrations are instrumented.
+ */
+function instrumentUsage(server: McpServer): void {
+  const original = server.tool.bind(server) as (...a: unknown[]) => unknown;
+  (server as unknown as { tool: (...a: unknown[]) => unknown }).tool = (...args: unknown[]) => {
+    const name = args[0] as string;
+    const lastIdx = args.length - 1;
+    const handler = args[lastIdx];
+    if (typeof handler === 'function') {
+      const inner = handler as (a: unknown, extra: unknown) => Promise<{ isError?: boolean }>;
+      args[lastIdx] = async (a: unknown, extra: unknown) => {
+        const clientId =
+          (extra as { authInfo?: { clientId?: string } } | undefined)?.authInfo?.clientId ?? 'unknown';
+        let ok = true;
+        try {
+          const result = await inner(a, extra);
+          ok = !result?.isError;
+          return result;
+        } catch (err) {
+          ok = false;
+          throw err;
+        } finally {
+          try {
+            await recordUsage(clientId, name, ok);
+          } catch {
+            /* best-effort usage logging — never fail the tool call */
+          }
+        }
+      };
+    }
+    return original(...args);
+  };
+}
 
 /** Registers all tools, resources, and prompts on a server instance. */
 export async function initMcpServer(server: McpServer): Promise<void> {
+  instrumentUsage(server);
 
   // Tool: list_models
   server.tool(

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSessionToken, SESSION_COOKIE } from '../../../../lib/session';
+import { normalizeAdminUsername } from '../../../../lib/adminAuth';
 import { checkRateLimit } from '../../../../lib/rateLimit';
 import { getMcpAuthHeaders, getMcpBaseUrl } from '../../../../lib/mcpAuth';
 
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'Auth not configured' }, { status: 503 });
     }
 
-    const token = await createSessionToken(sessionSecret);
+    const token = await createSessionToken(sessionSecret, normalizeAdminUsername(username));
     const res = NextResponse.json({ ok: true });
     res.cookies.set(SESSION_COOKIE, token, {
       httpOnly: true,

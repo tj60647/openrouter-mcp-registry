@@ -69,6 +69,14 @@ vi.mock('../lib/embeddings', () => ({
   generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...(args as [])),
 }));
 
+// ── Mock oauthStore (usage instrumentation) ──────────────────────────────────
+// initMcpServer wraps every tool to record usage; stub it so tool tests don't
+// touch the database.
+
+vi.mock('../lib/oauthStore', () => ({
+  recordUsage: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 function makeModel(overrides: Partial<Model> = {}): Model {
