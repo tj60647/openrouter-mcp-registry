@@ -16,9 +16,27 @@ export default function McpInfoPage() {
           <code>POST {baseUrl}/api/mcp</code>
         </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          Production deployments use OAuth bearer tokens. Server-side clients can exchange
-          MCP_CLIENT_ID and MCP_CLIENT_SECRET at /api/oauth/token; never expose those credentials in
-          browser code.
+          The endpoint speaks MCP over Streamable HTTP and, in production, is protected by OAuth
+          2.1.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Authentication</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          <strong style={{ color: 'var(--text)' }}>Interactive clients</strong> (Claude Code,
+          Cursor, VS Code, Claude Desktop) authenticate automatically — you don&apos;t need to
+          create or paste a token. On first use the server replies with a{' '}
+          <code>401</code> that points to its OAuth metadata; the client registers itself via
+          dynamic client registration, opens a browser to authorize (authorization code + PKCE),
+          and stores the resulting token. Because this registry serves public model data, the
+          authorization step is auto-approved, so the browser tab simply flashes and returns.
+        </p>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.6rem' }}>
+          <strong style={{ color: 'var(--text)' }}>Server-side services</strong> can instead use the
+          OAuth client-credentials grant: exchange <code>MCP_CLIENT_ID</code> and{' '}
+          <code>MCP_CLIENT_SECRET</code> at <code>/api/oauth/token</code> for a short-lived{' '}
+          <code>mcp:read</code> access token. Never expose those credentials in browser code.
         </p>
       </div>
 
@@ -158,9 +176,47 @@ export default function McpInfoPage() {
       </div>
 
       <div className="card">
+        <h2>Claude Code</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Add the server with one command — Claude Code runs the OAuth browser login itself:
+        </p>
+        <pre>
+          <code>{`claude mcp add --transport http registry ${baseUrl}/api/mcp`}</code>
+        </pre>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
+          The first time an agent uses a registry tool, a browser opens to authorize; after that it
+          stays connected.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Cursor</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Add to <code>~/.cursor/mcp.json</code> (or the project&apos;s <code>.cursor/mcp.json</code>).
+          Cursor completes the OAuth flow in the browser on first use:
+        </p>
+        <pre>
+          <code>
+            {JSON.stringify(
+              {
+                mcpServers: {
+                  'openrouter-registry': {
+                    url: `${baseUrl}/api/mcp`,
+                  },
+                },
+              },
+              null,
+              2
+            )}
+          </code>
+        </pre>
+      </div>
+
+      <div className="card">
         <h2>Claude Desktop Configuration</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Add this to your Claude Desktop MCP configuration:
+          Add this to your Claude Desktop MCP configuration. It will prompt you to authorize in the
+          browser on first use:
         </p>
         <pre>
           <code>
@@ -203,9 +259,9 @@ export default function McpInfoPage() {
           </code>
         </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          If your client cannot complete OAuth discovery automatically, add a short-lived bearer
-          token in a <code>headers</code> object as{' '}
-          <code>{`"Authorization": "Bearer YOUR_SHORT_LIVED_ACCESS_TOKEN"`}</code>.
+          VS Code completes the OAuth browser login automatically. Only if your client can&apos;t do
+          OAuth discovery, fall back to a bearer token in a <code>headers</code> object as{' '}
+          <code>{`"Authorization": "Bearer YOUR_ACCESS_TOKEN"`}</code>.
         </p>
       </div>
 
@@ -218,9 +274,8 @@ export default function McpInfoPage() {
           <code>{`[mcp_servers.openrouter-registry]\nurl = "${baseUrl}/api/mcp"`}</code>
         </pre>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.75rem' }}>
-          For authenticated deployments, add{' '}
-          <code>bearer_token = &quot;YOUR_SHORT_LIVED_ACCESS_TOKEN&quot;</code> if your client does
-          not perform OAuth discovery automatically.
+          Codex performs OAuth discovery automatically. Only if it can&apos;t, add{' '}
+          <code>bearer_token = &quot;YOUR_ACCESS_TOKEN&quot;</code> as a fallback.
         </p>
       </div>
 
@@ -328,15 +383,16 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
       <div className="card">
         <h2>Cron Sync</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          The registry is automatically refreshed weekly via Vercel Cron:
+          The registry is automatically refreshed daily (00:00 UTC) via Vercel Cron, and can also be
+          triggered on demand from the admin panel:
         </p>
         <pre>
-          <code>{`// vercel.json
+          <code>{`// apps/mcp/vercel.json
 {
   "crons": [
     {
       "path": "/api/cron/sync",
-      "schedule": "0 0 * * 0"
+      "schedule": "0 0 * * *"
     }
   ]
 }`}</code>

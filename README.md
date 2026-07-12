@@ -16,7 +16,7 @@ AI coding assistants and agents that call LLM APIs directly suffer from:
 
 This registry solves all three problems:
 
-- Fetches the live model catalog from OpenRouter weekly (and on-demand)
+- Fetches the live model catalog from OpenRouter daily (and on-demand)
 - Normalizes model IDs to a canonical form across providers
 - Serves an MCP-compatible endpoint that AI clients can query
 
@@ -79,8 +79,16 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
 | `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured) |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
+| `GET`  | `/api/admin/clients`     | List registered OAuth clients (requires `ADMIN_SECRET`)         |
+| `POST` | `/api/admin/clients/revoke` | Revoke or restore an OAuth client (requires `ADMIN_SECRET`)  |
+| `GET`  | `/api/admin/usage`       | MCP usage aggregated by client and tool (requires `ADMIN_SECRET`) |
 | `GET`  | `/api/cron/sync`         | Daily cron sync (protected by `CRON_SECRET`)                    |
-| `POST` | `/api/mcp`               | MCP Streamable HTTP endpoint                                    |
+| `POST` | `/api/mcp`               | MCP Streamable HTTP endpoint (OAuth 2.1 protected in production) |
+| `GET`  | `/api/oauth/authorize`   | OAuth 2.1 authorization endpoint (authorization code + PKCE, auto-approved) |
+| `POST` | `/api/oauth/token`       | OAuth token endpoint (`authorization_code`, `refresh_token`, `client_credentials`) |
+| `POST` | `/api/oauth/register`    | OAuth dynamic client registration (RFC 7591)                    |
+| `GET`  | `/.well-known/oauth-authorization-server` | OAuth Authorization Server metadata (RFC 8414) |
+| `GET`  | `/.well-known/oauth-protected-resource` | OAuth Protected Resource metadata (RFC 9728)  |
 | `GET`/`POST` | `/api/chat`        | MCP-owned demo chat endpoint; owns OpenRouter call and registry tool execution |
 
 ### `apps/web` routes (demo UI)
@@ -95,6 +103,10 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/chat`          | Chatbot proxy — browser posts here; server-side route delegates LLM + tool calls to `apps/mcp`                                                           |
 | `POST` | `/api/admin/login`   | Create a web-owned admin session after server-side credential verification by apps/mcp; issues session cookie                                                                                        |
 | `POST` | `/api/admin/logout`  | Clear admin session cookie                                                                                                                               |
+| `GET`  | `/api/admin/session` | Current signed-in admin identity (session-gated)                                                                                                         |
+| `GET`  | `/api/admin/clients` | Admin panel: list OAuth clients (proxies to `apps/mcp`, session-gated)                                                                                   |
+| `POST` | `/api/admin/clients/revoke` | Admin panel: revoke/restore an OAuth client (proxies to `apps/mcp`, session-gated)                                                                |
+| `GET`  | `/api/admin/usage`   | Admin panel: MCP usage by client and tool (proxies to `apps/mcp`, session-gated)                                                                         |
 | `POST` | `/api/admin/refresh` | Removed from web runtime; admin sync is owned by `apps/mcp`                                                                                              |
 | `GET`  | `/api/cron/sync`     | Removed from web runtime; cron sync is owned by `apps/mcp`                                                                                               |
 
@@ -320,7 +332,7 @@ Requests that exceed the limit receive a `429 Too Many Requests` response.
 
 | File                      | Used by                                           | Purpose                                         |
 | ------------------------- | ------------------------------------------------- | ----------------------------------------------- |
-| `apps/mcp/vercel.json`    | `apps/mcp` Vercel project                         | Weekly cron at `/api/cron/sync`                 |
+| `apps/mcp/vercel.json`    | `apps/mcp` Vercel project                         | Daily cron at `/api/cron/sync`                  |
 | `vercel.json` (repo root) | Repo-root deployments                             | Metadata only; no web cron or backend sync work |
 
 Cron and backend sync are intentionally configured only for `apps/mcp`.
@@ -330,6 +342,30 @@ Cron and backend sync are intentionally configured only for `apps/mcp`.
 ## MCP Client Setup
 
 The MCP endpoint is served by **`apps/mcp`** at `POST /api/mcp`.
+
+In production the endpoint is protected by OAuth 2.1. **Interactive clients (Claude Code, Cursor, VS Code, Claude Desktop, Codex) authenticate automatically** — they discover the server's OAuth metadata from the `401` response, self-register via dynamic client registration, and open a browser to authorize (authorization code + PKCE). Because the registry serves public model data, authorization is auto-approved, so there is no consent screen and no token to paste. You only need to supply a bearer token for non-interactive/server-side clients — see [With OAuth bearer tokens](#with-oauth-bearer-tokens).
+
+### Claude Code
+
+```bash
+claude mcp add --transport http registry https://your-mcp-app.vercel.app/api/mcp
+```
+
+The first time an agent calls a registry tool, Claude Code runs the OAuth browser login; after that it stays connected. Registered clients (and per-agent usage) are visible in the admin panel under **Clients** and **Usage**.
+
+### Cursor
+
+Add to `~/.cursor/mcp.json` (or the project's `.cursor/mcp.json`); Cursor completes the OAuth flow in the browser on first use:
+
+```json
+{
+  "mcpServers": {
+    "openrouter-registry": {
+      "url": "https://your-mcp-app.vercel.app/api/mcp"
+    }
+  }
+}
+```
 
 ### Claude Desktop
 
@@ -348,7 +384,7 @@ Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_con
 
 ### With OAuth bearer tokens
 
-In production, `apps/mcp` should have `OAUTH_JWT_SECRET` configured, so `/api/mcp` requires a bearer token with the `mcp:read` scope. Trusted server-side clients can request a short-lived token from `POST /api/oauth/token` with `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET`; browser code must not receive these credentials.
+Interactive clients don't need this — they authenticate automatically (above). This path is for **non-interactive / server-side clients** that can't run a browser OAuth flow. In production, `apps/mcp` has `OAUTH_JWT_SECRET` configured, so `/api/mcp` requires a bearer token with the `mcp:read` scope. Trusted server-side clients request a short-lived token from `POST /api/oauth/token` using the client-credentials grant with `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET`; browser code must not receive these credentials.
 
 ```json
 {
@@ -478,6 +514,19 @@ const comparePrompt = await mcp.getPrompt('compare_models_prompt', {
   model_ids: 'anthropic/claude-sonnet-4-5,openai/gpt-4o',
 });
 ```
+
+---
+
+## Admin Panel
+
+The `apps/web` deployment includes an admin area at `/admin`, reachable from the **Admin** tab in the header and protected by a username/password login (session cookie signed with `ADMIN_SESSION_SECRET`). Create or reset the admin user with `pnpm db:create-admin` (see [Available Scripts](#available-scripts)).
+
+The panel provides:
+
+- **Dashboard** — entry point to the sections below.
+- **Clients** — every OAuth client (coding agent) that has registered via dynamic client registration, with a **Revoke/Restore** action. Revoking immediately blocks a client from obtaining new access tokens (existing tokens expire within an hour).
+- **Usage** — MCP tool calls attributed to each client, plus a breakdown by tool, over a 7/30/90-day window. Every `/api/mcp` tool call is recorded per client, so you can see which agents are using the registry and how.
+- **Sync** — trigger a manual model-catalog refresh on demand (in addition to the daily cron).
 
 ---
 
