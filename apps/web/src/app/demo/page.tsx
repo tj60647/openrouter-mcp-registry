@@ -31,6 +31,71 @@ function parseMaxTokens(raw: string): number | undefined {
   return isNaN(v) || v <= 0 ? undefined : v;
 }
 
+// ── Chat session persistence (localStorage) ─────────────────────────────────────
+
+const CHAT_STORAGE_KEY = 'demo-chat-sessions-v1';
+const MAX_SESSIONS = 30;
+
+interface StoredSession {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: unknown[];
+}
+
+function makeSessionId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptySession(): StoredSession {
+  const now = Date.now();
+  return { id: makeSessionId(), createdAt: now, updatedAt: now, messages: [] };
+}
+
+function loadSessions(): StoredSession[] {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s): s is StoredSession =>
+        !!s && typeof (s as StoredSession).id === 'string' && Array.isArray((s as StoredSession).messages),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: StoredSession[]): void {
+  const trimmed = sessions.slice(-MAX_SESSIONS);
+  try {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Storage quota exceeded (or unavailable): keep only the most recent chats.
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed.slice(-5)));
+    } catch {
+      /* give up silently — persistence is best-effort for the demo */
+    }
+  }
+}
+
+/** Short label for a chat: the first user message, truncated. */
+function sessionTitle(messages: unknown[]): string {
+  for (const m of messages as Array<{ role?: string; parts?: Array<{ type?: string; text?: string }> }>) {
+    if (m?.role === 'user') {
+      const text = (m.parts ?? [])
+        .filter((p) => p?.type === 'text')
+        .map((p) => p.text ?? '')
+        .join(' ')
+        .trim();
+      if (text) return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+    }
+  }
+  return 'New chat';
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface AgentTool {
@@ -662,7 +727,7 @@ export default function DemoPage() {
     [selectedModel, temperature, maxOutputTokens]
   );
 
-  const { messages, sendMessage, status, error, stop } = useChat({
+  const { messages, sendMessage, status, error, stop, setMessages } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
       prepareSendMessagesRequest: ({ messages, body }) => ({
@@ -677,6 +742,80 @@ export default function DemoPage() {
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const loading = status === 'submitted' || status === 'streaming';
+
+  // ── Persisted chat sessions (localStorage) ──────────────────────────────────
+  const [sessions, setSessions] = useState<StoredSession[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const hydratedRef = useRef(false);
+  const skipSaveRef = useRef(false);
+
+  // Load saved sessions once on mount and open the most recent.
+  useEffect(() => {
+    let loaded = loadSessions();
+    if (loaded.length === 0) loaded = [emptySession()];
+    const idx = loaded.length - 1;
+    setSessions(loaded);
+    setCurrentIndex(idx);
+    skipSaveRef.current = true;
+    setMessages(loaded[idx].messages as Parameters<typeof setMessages>[0]);
+    hydratedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the active session whenever its messages change.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      return;
+    }
+    setSessions((prev) => {
+      if (prev.length === 0) return prev;
+      const idx = Math.min(currentIndex, prev.length - 1);
+      const next = prev.slice();
+      next[idx] = { ...next[idx], messages: messages as unknown[], updatedAt: Date.now() };
+      saveSessions(next);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
+  const switchTo = useCallback(
+    (idx: number) => {
+      if (idx < 0 || idx >= sessions.length || idx === currentIndex) return;
+      if (loading) stop();
+      skipSaveRef.current = true;
+      setCurrentIndex(idx);
+      setMessages(sessions[idx].messages as Parameters<typeof setMessages>[0]);
+    },
+    [sessions, currentIndex, loading, stop, setMessages],
+  );
+
+  const newChat = useCallback(() => {
+    if (loading) stop();
+    // Don't pile up empty chats — if the current one is untouched, just stay on it.
+    if (messages.length === 0 && sessions.length > 0) return;
+    const fresh = emptySession();
+    const next = [...sessions, fresh].slice(-MAX_SESSIONS);
+    saveSessions(next);
+    setSessions(next);
+    setCurrentIndex(next.length - 1);
+    skipSaveRef.current = true;
+    setMessages([] as Parameters<typeof setMessages>[0]);
+  }, [loading, stop, messages.length, sessions, setMessages]);
+
+  const deleteCurrent = useCallback(() => {
+    if (loading) stop();
+    const idx = Math.min(currentIndex, sessions.length - 1);
+    let next = sessions.filter((_, i) => i !== idx);
+    if (next.length === 0) next = [emptySession()];
+    const newIdx = Math.min(idx, next.length - 1);
+    saveSessions(next);
+    setSessions(next);
+    setCurrentIndex(newIdx);
+    skipSaveRef.current = true;
+    setMessages(next[newIdx].messages as Parameters<typeof setMessages>[0]);
+  }, [loading, stop, currentIndex, sessions, setMessages]);
 
   // Fetch agent config on mount
   useEffect(() => {
@@ -711,6 +850,18 @@ export default function DemoPage() {
 
   /** Short display label for the active model, e.g. "gpt-4o-mini" */
   const modelLabel = activeModel ? activeModel.split('/').pop() || activeModel : 'Assistant';
+
+  const chatTitle = messages.length > 0 ? sessionTitle(messages as unknown[]) : 'New chat';
+  const navBtnStyle = (disabled: boolean): React.CSSProperties => ({
+    background: 'none',
+    border: '1px solid var(--border)',
+    color: disabled ? 'var(--border)' : 'var(--text)',
+    fontSize: '1.05rem',
+    lineHeight: 1,
+    padding: '0.2rem 0.6rem',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+  });
 
   return (
     <div className="stack" style={{ height: 'calc(100vh - 8rem)', maxHeight: 900 }}>
@@ -779,6 +930,77 @@ export default function DemoPage() {
             minWidth: 0,
           }}
         >
+          {/* Chat history toolbar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={newChat}
+              title="Start a new chat"
+              style={{
+                background: 'none',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+                fontSize: '0.78rem',
+                padding: '0.3rem 0.7rem',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ＋ New chat
+            </button>
+
+            <div style={{ flex: 1 }} />
+
+            <button
+              type="button"
+              onClick={() => switchTo(currentIndex - 1)}
+              disabled={currentIndex <= 0}
+              aria-label="Previous chat"
+              title="Previous chat"
+              style={navBtnStyle(currentIndex <= 0)}
+            >
+              ‹
+            </button>
+            <span
+              title={chatTitle}
+              style={{
+                fontSize: '0.78rem',
+                color: 'var(--text-muted)',
+                maxWidth: 240,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Chat {sessions.length > 0 ? currentIndex + 1 : 0} / {sessions.length}
+              {chatTitle !== 'New chat' ? ` · ${chatTitle}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => switchTo(currentIndex + 1)}
+              disabled={currentIndex >= sessions.length - 1}
+              aria-label="Next chat"
+              title="Next chat"
+              style={navBtnStyle(currentIndex >= sessions.length - 1)}
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              onClick={deleteCurrent}
+              aria-label="Delete this chat"
+              title="Delete this chat"
+              style={{
+                background: 'none',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+                fontSize: '0.85rem',
+                padding: '0.3rem 0.55rem',
+              }}
+            >
+              🗑
+            </button>
+          </div>
+
           {/* Chat window */}
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div
