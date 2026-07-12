@@ -11,6 +11,7 @@ const links = [
   { href: '/sync-status', label: 'Sync Status' },
   { href: '/mcp-info', label: 'MCP Info' },
   { href: '/demo', label: 'Demo' },
+  { href: '/admin', label: 'Admin' },
 ];
 
 export default function NavBar() {
@@ -20,7 +21,7 @@ export default function NavBar() {
       <div className="nav-inner">
         <Link href="/" className="brand">
           <RegistryIcon size={22} />
-          Registry MCP
+          OpenRouter Registry MCP
         </Link>
         <ul className="links">
           {links.map((link) => (
