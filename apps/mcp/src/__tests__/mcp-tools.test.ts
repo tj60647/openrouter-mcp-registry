@@ -192,6 +192,28 @@ describe('list_models tool', () => {
     );
   });
 
+  it('leaves limit undefined when the caller omits it, so the db returns everything', async () => {
+    mockGetModels.mockResolvedValueOnce([makeModel()]);
+    mockGetModelsCount.mockResolvedValueOnce(1);
+
+    await toolHandlers['list_models']!({ offset: 0 });
+
+    expect(mockGetModels).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: undefined, offset: 0 })
+    );
+  });
+
+  it('reports count === total for an unbounded pull', async () => {
+    mockGetModels.mockResolvedValueOnce([makeModel({ id: 'a/one' }), makeModel({ id: 'b/two' })]);
+    mockGetModelsCount.mockResolvedValueOnce(2);
+
+    const result = await toolHandlers['list_models']!({ offset: 0 });
+
+    const body = parseResult(result) as { count: number; total: number };
+    expect(body.count).toBe(2);
+    expect(body.total).toBe(2);
+  });
+
   it('returns isError: true when the db throws', async () => {
     mockGetModels.mockRejectedValueOnce(new Error('db down'));
     const result = await toolHandlers['list_models']!({ limit: 10, offset: 0 });

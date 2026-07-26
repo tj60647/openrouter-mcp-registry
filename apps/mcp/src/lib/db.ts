@@ -114,7 +114,8 @@ function buildModelWhere(opts: ModelFilter): { where: string; params: (string | 
 
 export async function getModels(
   opts: ModelFilter & {
-    limit: number;
+    /** Omit to return every matching row — no LIMIT clause is emitted. */
+    limit?: number;
     offset: number;
     sortBy?: string;
     sortDir?: string;
@@ -126,8 +127,21 @@ export async function getModels(
   const nullsClause = resolveNullsClause(sortBy);
 
   const { where, params } = buildModelWhere(opts);
-  params.push(limit, offset);
-  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause} LIMIT $${params.length - 1} OFFSET $${params.length}`;
+
+  // `limit` is optional so a caller can pull the whole catalogue in one query.
+  // Each placeholder is numbered from params.length *after* its value is pushed,
+  // so the numbering stays correct whichever clauses are present.
+  let pagination = '';
+  if (limit != null) {
+    params.push(limit);
+    pagination += ` LIMIT $${params.length}`;
+  }
+  if (offset > 0) {
+    params.push(offset);
+    pagination += ` OFFSET $${params.length}`;
+  }
+
+  const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause}${pagination}`;
 
   const result = await db.query<ModelRow>(queryStr, params);
   return result.rows.map(rowToModel);

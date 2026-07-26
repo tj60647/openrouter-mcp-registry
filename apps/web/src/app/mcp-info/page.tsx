@@ -14,7 +14,7 @@ const TOOLS = [
     description:
       'List models in the registry with optional filtering and sorting. Retired models are included unless you pass availableOnly: true.',
     params:
-      '{ limit?: number = 500 (1–500), offset?: number = 0, provider?: string, query?: string, sortBy?: string = "id", sortDir?: "asc" | "desc" = "asc", availableOnly?: boolean = false, verbose?: boolean = false, fields?: string[] }',
+      '{ limit?: number (omit = all records), offset?: number = 0, provider?: string, query?: string, sortBy?: string = "id", sortDir?: "asc" | "desc" = "asc", availableOnly?: boolean = false, verbose?: boolean = false, fields?: string[] }',
     returns: '{ models: Model[], count: number, total: number }',
     notes:
       'count is the number of records in this page; total is every record matching provider/query/availableOnly, ignoring limit and offset.',
@@ -637,7 +637,7 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
             {
               uri: 'registry://models',
               description:
-                'Full list of models in the registry (fetches up to 500, unfiltered, sorted by id — includes retired models)',
+                'Full list of models in the registry (every record, unfiltered, sorted by id — includes retired models)',
             },
             {
               uri: 'registry://status',
@@ -890,18 +890,18 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
           </li>
         </ul>
         <pre>
-          <code>{`// Cheapest possible catalogue pull: 4 fields per record
+          <code>{`// Cheapest possible catalogue pull: 4 fields per record, no limit
 await mcp.callTool('list_models', {
-  limit: 500,
   fields: ['displayName', 'contextLength', 'inputPricePer1k', 'outputPricePer1k'],
 });
 // → { models: [{ id, displayName, contextLength, inputPricePer1k, outputPricePer1k }, …],
 //      count: 452, total: 452 }`}</code>
         </pre>
         <p style={{ ...MUTED, marginTop: '0.75rem' }}>
-          For a full-catalogue pull, call <code>get_registry_status</code> first and size the request
-          from <code>totalCount</code>. The catalogue is currently a few hundred models, so a single{' '}
-          <code>limit: 500</code> page usually covers it.
+          <strong style={{ color: 'var(--text)' }}>Omitting <code>limit</code> returns everything</strong>{' '}
+          — there is no cap, so a full-catalogue pull needs no pagination and no size probe. Confirm you
+          got it all by checking <code>count === total</code>. Supply <code>limit</code> only when you
+          deliberately want a page, and pair it with <code>offset</code>.
         </p>
 
         <h3 style={{ ...SUBHEAD, marginTop: '1.25rem' }}>

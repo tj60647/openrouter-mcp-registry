@@ -158,11 +158,9 @@ export async function initMcpServer(server: McpServer): Promise<void> {
         .number()
         .int()
         .min(1)
-        .max(500)
         .optional()
-        .default(500)
         .describe(
-          'Maximum records to return in one page. Defaults to 500 so a single call returns the whole catalogue; payload size is controlled by verbose/fields, not by limit.'
+          'Maximum records to return in one page. OMIT IT to return every matching record — that is the default. Payload size is controlled by verbose/fields, not by limit. Supply it only when you deliberately want a page, in which case pair it with offset.'
         ),
       offset: z.number().int().min(0).optional().default(0),
       provider: z.string().optional(),
@@ -545,7 +543,9 @@ export async function initMcpServer(server: McpServer): Promise<void> {
     { description: 'Full list of models currently in the registry', mimeType: 'application/json' },
     async (uri) => {
       try {
-        const models = await getModels({ limit: 500, offset: 0 });
+        // No limit: this resource is documented as the full registry, so a cap
+        // here would silently truncate it once the catalogue outgrew the number.
+        const models = await getModels({ offset: 0 });
         return {
           contents: [
             {

@@ -119,6 +119,34 @@ describe('getModels', () => {
     expect(params).toContain('anthropic');
   });
 
+  it('emits no LIMIT clause when limit is omitted (full-catalogue pull)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getModels({ offset: 0 });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).not.toContain('LIMIT');
+    expect(sql).not.toContain('OFFSET');
+    expect(params).toHaveLength(0);
+  });
+
+  it('numbers LIMIT/OFFSET placeholders after the WHERE params', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getModels({ limit: 10, offset: 20, provider: 'anthropic' });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('provider = $1');
+    expect(sql).toContain('LIMIT $2');
+    expect(sql).toContain('OFFSET $3');
+    expect(params).toEqual(['anthropic', 10, 20]);
+  });
+
+  it('numbers OFFSET correctly when limit is omitted but offset is set', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getModels({ offset: 20, provider: 'anthropic' });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).not.toContain('LIMIT');
+    expect(sql).toContain('OFFSET $2');
+    expect(params).toEqual(['anthropic', 20]);
+  });
+
   it('passes the text query filter (ILIKE) to the query', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await getModels({ limit: 10, offset: 0, query: 'claude' });

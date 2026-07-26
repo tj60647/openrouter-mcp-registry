@@ -136,7 +136,7 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 | Tool                      | Description                                     | Parameters                                                                                                                                         | Returns                              |
 | ------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `list_models`             | List all registry models                        | `limit` (default **500**, max 500), `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly`, `verbose`, `fields`                        | `{ models, count, total }`           |
+| `list_models`             | List all registry models                        | `limit` (**omit for all records**), `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly`, `verbose`, `fields`                        | `{ models, count, total }`           |
 | `resolve_model`           | Resolve and look up a model by ID               | `input: string`                                                                                                                                      | full record                          |
 | `get_model`               | Get full details for a model                    | `id: string`                                                                                                                                         | full record                          |
 | `search_models`           | Search by name, ID, or provider                 | `query: string`, `limit` (default 20, max 100), `offset`, `sortBy`, `sortDir`, `verbose`, `fields`                                                   | `{ models, count, total }`           |
@@ -183,7 +183,7 @@ Read-only data accessible via `resources/read`:
 
 | URI                      | Description                                                                                            |
 | ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `registry://models`      | Full model list (up to 500, unfiltered, includes retired models)                                       |
+| `registry://models`      | Full model list (every record, unfiltered, includes retired models)                                       |
 | `registry://status`      | Sync status (`lastSuccessfulSync`, `lastAttemptedSync`, `lastError`, `recordCount`) — no live counts   |
 | `registry://models/{id}` | Details for a specific model (URL-encode the ID)                                                       |
 
