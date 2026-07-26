@@ -14,7 +14,7 @@ const TOOLS = [
     description:
       'List models in the registry with optional filtering and sorting. Retired models are included unless you pass availableOnly: true.',
     params:
-      '{ limit?: number = 50 (1–500), offset?: number = 0, provider?: string, query?: string, sortBy?: string = "id", sortDir?: "asc" | "desc" = "asc", availableOnly?: boolean = false, verbose?: boolean = false, fields?: string[] }',
+      '{ limit?: number = 500 (1–500), offset?: number = 0, provider?: string, query?: string, sortBy?: string = "id", sortDir?: "asc" | "desc" = "asc", availableOnly?: boolean = false, verbose?: boolean = false, fields?: string[] }',
     returns: '{ models: Model[], count: number, total: number }',
     notes:
       'count is the number of records in this page; total is every record matching provider/query/availableOnly, ignoring limit and offset.',
@@ -896,7 +896,7 @@ await mcp.callTool('list_models', {
   fields: ['displayName', 'contextLength', 'inputPricePer1k', 'outputPricePer1k'],
 });
 // → { models: [{ id, displayName, contextLength, inputPricePer1k, outputPricePer1k }, …],
-//      count: 500, total: 452 }`}</code>
+//      count: 452, total: 452 }`}</code>
         </pre>
         <p style={{ ...MUTED, marginTop: '0.75rem' }}>
           For a full-catalogue pull, call <code>get_registry_status</code> first and size the request

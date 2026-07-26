@@ -160,8 +160,10 @@ export async function initMcpServer(server: McpServer): Promise<void> {
         .min(1)
         .max(500)
         .optional()
-        .default(50)
-        .describe('Maximum records to return in one page. Defaults to 50; raise up to 500 for bulk pulls.'),
+        .default(500)
+        .describe(
+          'Maximum records to return in one page. Defaults to 500 so a single call returns the whole catalogue; payload size is controlled by verbose/fields, not by limit.'
+        ),
       offset: z.number().int().min(0).optional().default(0),
       provider: z.string().optional(),
       query: z.string().optional().describe('Text search across model ID, display name, and provider'),
