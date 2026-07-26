@@ -97,7 +97,9 @@ export default function AdminClientsPage() {
               {clients.map((c) => {
                 const revoked = c.revokedAt !== null;
                 return (
-                  <tr key={c.clientId} style={revoked ? { opacity: 0.55 } : undefined}>
+                  // De-emphasise via colour, not opacity: 0.55 opacity on white
+                  // takes the row below 2:1 contrast.
+                  <tr key={c.clientId} style={revoked ? { color: 'var(--text-muted)' } : undefined}>
                     <td>{c.clientName}</td>
                     <td>
                       <code style={{ fontSize: '0.8rem' }}>{c.clientId.slice(0, 12)}…</code>
@@ -106,23 +108,20 @@ export default function AdminClientsPage() {
                     <td style={{ whiteSpace: 'nowrap', fontSize: '0.85rem' }}>{fmtDate(c.createdAt)}</td>
                     <td>
                       {revoked ? (
-                        <span className="badge" style={{ color: 'var(--error)', borderColor: 'var(--error)' }}>
-                          Revoked
-                        </span>
+                        <span className="badge badge-error">Revoked</span>
                       ) : (
-                        <span className="badge" style={{ color: 'var(--success)', borderColor: 'var(--success)' }}>
-                          Active
-                        </span>
+                        <span className="badge badge-success">Active</span>
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <button
+                        className="btn-ghost"
                         disabled={busy === c.clientId}
                         onClick={() => void toggleRevoke(c.clientId, !revoked)}
                         style={
                           revoked
-                            ? { background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }
-                            : { background: 'transparent', border: '1px solid var(--error)', color: 'var(--error)' }
+                            ? undefined
+                            : { borderColor: 'var(--danger)', color: 'var(--error-text)' }
                         }
                       >
                         {busy === c.clientId ? '…' : revoked ? 'Restore' : 'Revoke'}

@@ -234,6 +234,11 @@ async function migrate() {
   // Revocation support: a revoked client is rejected at authorize/token time.
   await sql`ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`;
 
+  // RFC 7592 client management: SHA-256 hash of the registration access token
+  // handed to the client once at registration, letting it read or delete its own
+  // registration. NULL for clients registered before this column existed.
+  await sql`ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS registration_access_token_hash TEXT`;
+
   // Per-client MCP usage log — one row per tool call, for usage-by-agent reporting.
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_usage (

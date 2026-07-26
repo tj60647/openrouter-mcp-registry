@@ -24,6 +24,7 @@ import {
   verifyClientSecret,
   verifyPkceS256,
   filterScopes,
+  SUPPORTED_GRANT_TYPES,
   TOKEN_TTL_SECONDS,
 } from '../../../../lib/oauth';
 import { findClient, consumeAuthorizationCode } from '../../../../lib/oauthStore';
@@ -56,8 +57,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf-8');
     const colonIdx = decoded.indexOf(':');
     if (colonIdx > 0) {
-      clientId = decodeURIComponent(decoded.slice(0, colonIdx));
-      clientSecret = decodeURIComponent(decoded.slice(colonIdx + 1));
+      // RFC 6749 §2.3.1 form-urlencodes both halves. A malformed escape is a
+      // bad credential, not a server fault — decodeURIComponent would throw.
+      try {
+        clientId = decodeURIComponent(decoded.slice(0, colonIdx));
+        clientSecret = decodeURIComponent(decoded.slice(colonIdx + 1));
+      } catch {
+        return tokenError('invalid_client', 401);
+      }
     }
   }
 
@@ -89,9 +96,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // Server-wide support is checked first so an unknown grant still reports
+  // unsupported_grant_type rather than being blamed on the client.
+  if (!grantType || !SUPPORTED_GRANT_TYPES.includes(grantType)) {
+    return tokenError('unsupported_grant_type', 400);
+  }
+  // RFC 6749 §5.2 unauthorized_client: the grant is supported here but this
+  // client is not registered for it. Without this, a public (secret-less)
+  // client could mint tokens via client_credentials just by knowing its id.
+  if (!client.grantTypes.includes(grantType)) {
+    return tokenError(
+      'unauthorized_client',
+      400,
+      `client is not registered for grant_type=${grantType}`,
+    );
+  }
+
   switch (grantType) {
     case 'authorization_code':
-      return handleAuthorizationCode(client.clientId, params);
+      // A refresh token is only issued when the client is registered for the
+      // refresh_token grant — otherwise the check above would reject the very
+      // token we handed out (RFC 7591 lets a client register
+      // authorization_code without refresh_token).
+      return handleAuthorizationCode(
+        client.clientId,
+        params,
+        client.grantTypes.includes('refresh_token'),
+      );
     case 'refresh_token':
       return handleRefreshToken(client.clientId, params);
     case 'client_credentials':
@@ -104,6 +135,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 async function handleAuthorizationCode(
   clientId: string,
   params: Record<string, string | undefined>,
+  withRefresh: boolean,
 ): Promise<NextResponse> {
   const code = params['code'];
   const redirectUri = params['redirect_uri'];
@@ -124,7 +156,7 @@ async function handleAuthorizationCode(
     return tokenError('invalid_grant', 400, 'PKCE verification failed');
   }
 
-  return issueTokens(clientId, record.scope, true);
+  return issueTokens(clientId, record.scope, withRefresh);
 }
 
 async function handleRefreshToken(

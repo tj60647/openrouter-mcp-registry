@@ -22,11 +22,14 @@ function formatDate(date: Date | string | null): string {
   return new Date(date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+// The rows scrolling beneath are white, so the pinned header needs its own fill
+// (studio thead bg-gray-50) plus a hard black rule to occlude them cleanly.
 const stickyTh: React.CSSProperties = {
   position: 'sticky',
   top: 0,
-  background: 'var(--bg-card)',
-  boxShadow: '0 1px 0 var(--border)',
+  background: 'var(--bg-subtle)',
+  borderBottom: '1px solid var(--border-strong)',
+  boxShadow: '0 1px 0 var(--border-strong)',
   zIndex: 1,
 };
 
@@ -72,7 +75,7 @@ function SortableHeader({
       }}
     >
       {children}
-      <span style={{ marginLeft: '0.3rem', opacity: active ? 1 : 0.3, color: 'var(--accent)' }}>
+      <span style={{ marginLeft: '0.3rem', color: active ? 'var(--accent)' : 'var(--text-faint)' }}>
         {icon}
       </span>
     </th>
@@ -112,11 +115,13 @@ function FilterHeader({
           style={{
             marginLeft: '0.35rem',
             background: 'var(--accent)',
-            color: '#fff',
-            fontSize: '0.65rem',
-            borderRadius: '9999px',
+            color: 'var(--bg)',
+            fontSize: '0.6rem',
+            borderRadius: 0,
             padding: '0.05rem 0.4rem',
             fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
             verticalAlign: 'middle',
           }}
         >
@@ -247,15 +252,20 @@ export default function ModelsPage() {
           <button
             key={t}
             onClick={() => { setTab(t); setOffset(0); }}
+            className={tab === t ? undefined : 'btn-ghost'}
             style={{
-              background: tab === t ? 'var(--accent)' : 'var(--bg-card)',
-              color: tab === t ? '#fff' : 'var(--text-muted)',
-              border: `1px solid ${tab === t ? 'var(--accent)' : 'var(--border)'}`,
-              borderRadius: 6,
-              padding: '0.35rem 1rem',
+              /* Studio toggle pair (AdminLayout.tsx:128-132): active =
+                 border-black bg-black text-white; inactive = the ghost button. */
+              ...(tab === t
+                ? { background: 'var(--accent)', color: 'var(--bg)', border: '1px solid var(--accent)' }
+                : {}),
+              borderRadius: 0,
+              padding: '0.4rem 1rem',
               cursor: 'pointer',
-              fontWeight: tab === t ? 600 : 400,
-              textTransform: 'capitalize',
+              fontSize: '0.625rem',
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
             }}
           >
             {t}
@@ -301,7 +311,8 @@ export default function ModelsPage() {
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             {/* Scrollable table container — headers remain visible while rows scroll */}
             <div style={{ overflowX: 'auto' }}>
-              <div style={{ maxHeight: 'calc(100vh - 340px)', minHeight: 200, overflowY: 'auto' }}>
+              {/* 316px tracks the tighter chrome: 44px nav + 2rem main padding. */}
+              <div style={{ maxHeight: 'calc(100vh - 316px)', minHeight: 200, overflowY: 'auto' }}>
                 <table style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                   <thead>
                     <tr>
@@ -391,13 +402,13 @@ export default function ModelsPage() {
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           {m.supportedParameters.includes('tools')
-                            ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>✓</span>
-                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                            ? <span style={{ color: 'var(--text)', fontWeight: 700 }}>✓</span>
+                            : <span style={{ color: 'var(--text-faint)' }}>—</span>}
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           {m.supportedParameters.includes('reasoning')
-                            ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>✓</span>
-                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                            ? <span style={{ color: 'var(--text)', fontWeight: 700 }}>✓</span>
+                            : <span style={{ color: 'var(--text-faint)' }}>—</span>}
                         </td>
                       </tr>
                     ))}

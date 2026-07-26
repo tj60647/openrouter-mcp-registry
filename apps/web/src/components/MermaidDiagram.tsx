@@ -20,20 +20,32 @@ export default function MermaidDiagram({ chart, title }: MermaidDiagramProps) {
         const mermaidModule = await import('mermaid');
         const mermaid = mermaidModule.default;
 
+        // 'base' is the only built-in theme that fully honours themeVariables.
+        // Palette mirrors the studio's hand-drawn flow SVG (App.tsx:684-775):
+        // white fills, #1f1f1f strokes, Inter labels, no chromatic accent.
         mermaid.initialize({
           startOnLoad: false,
-          theme: 'dark',
+          theme: 'base',
           securityLevel: 'loose',
           themeVariables: {
-            primaryColor: '#1a1a1a',
-            primaryTextColor: '#e0e0e0',
-            primaryBorderColor: '#6366f1',
-            lineColor: '#818cf8',
-            tertiaryColor: '#111111',
-            background: '#111111',
-            mainBkg: '#1a1a1a',
-            secondBkg: '#151515',
-            tertiaryBkg: '#0f0f0f',
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+            primaryColor: '#ffffff',
+            primaryTextColor: '#000000',
+            primaryBorderColor: '#000000',
+            secondaryColor: '#f8f8f8',
+            tertiaryColor: '#f8f8f8',
+            lineColor: '#1f1f1f',
+            textColor: '#000000',
+            nodeTextColor: '#000000',
+            nodeBorder: '#1f1f1f',
+            background: '#ffffff',
+            mainBkg: '#ffffff',
+            secondBkg: '#f8f8f8',
+            tertiaryBkg: '#f8f8f8',
+            clusterBkg: '#ffffff',
+            clusterBorder: '#e0e0e0',
+            edgeLabelBackground: '#ffffff',
+            titleColor: '#000000',
           },
         });
 

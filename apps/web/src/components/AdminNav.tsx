@@ -50,15 +50,16 @@ export default function AdminNav() {
         gap: '0.75rem',
       }}
     >
-      <div className="row" style={{ gap: '1.25rem', flexWrap: 'wrap' }}>
+      <div className="row" style={{ gap: '0.375rem', flexWrap: 'wrap' }}>
         {links.map((l) => {
           const isActive = l.href === '/admin' ? pathname === '/admin' : pathname.startsWith(l.href);
           return (
+            // Bordered tab pair (studio AdminLayout.tsx:128-132). Weight alone
+            // no longer differentiates the active tab now that every link is black.
             <Link
               key={l.href}
               href={l.href}
-              className={isActive ? 'active' : ''}
-              style={{ fontWeight: isActive ? 600 : 400 }}
+              className={isActive ? 'btn-ghost active' : 'btn-ghost'}
             >
               {l.label}
             </Link>
@@ -71,14 +72,7 @@ export default function AdminNav() {
             Signed in as <strong style={{ color: 'var(--text)' }}>{username}</strong>
           </span>
         )}
-        <button
-          onClick={() => void logout()}
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--border)',
-            color: 'var(--text-muted)',
-          }}
-        >
+        <button className="btn-ghost" onClick={() => void logout()}>
           Sign out
         </button>
       </div>

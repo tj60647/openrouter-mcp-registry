@@ -73,7 +73,8 @@ export default function ResolvePage() {
                 key={example}
                 type="button"
                 onClick={() => setInput(example)}
-                style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
+                className="btn-ghost"
+                style={{ padding: '0.35rem 0.7rem', fontFamily: 'var(--mono)', textTransform: 'none', letterSpacing: 0 }}
               >
                 {example}
               </button>
@@ -98,7 +99,19 @@ export default function ResolvePage() {
               </div>
               <div>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.2rem' }}>Resolved To</p>
-                <code style={{ color: 'var(--accent)' }}>{result.resolved}</code>
+                {/* The resolved ID is the answer of the page. With no accent hue
+                    left, weight + a black rule carry the emphasis instead. */}
+                <code
+                  style={{
+                    fontWeight: 700,
+                    background: 'none',
+                    padding: '0 0 0.15rem',
+                    borderBottom: '2px solid var(--accent)',
+                    display: 'inline-block',
+                  }}
+                >
+                  {result.resolved}
+                </code>
               </div>
               <div>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.2rem' }}>Source</p>

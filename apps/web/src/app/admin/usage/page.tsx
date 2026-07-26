@@ -56,14 +56,11 @@ export default function AdminUsagePage() {
         </div>
         <div className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
           {WINDOWS.map((w) => (
+            // Studio toggle pair: active = solid black, inactive = ghost.
             <button
               key={w}
+              className={days === w ? undefined : 'btn-ghost'}
               onClick={() => setDays(w)}
-              style={
-                days === w
-                  ? { background: 'var(--accent)', color: '#fff' }
-                  : { background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }
-              }
             >
               {w}d
             </button>
@@ -106,7 +103,19 @@ export default function AdminUsagePage() {
                         <td>{c.clientName ?? <span style={{ color: 'var(--text-muted)' }}>Unknown</span>}</td>
                         <td><code style={{ fontSize: '0.8rem' }}>{c.clientId.slice(0, 12)}…</code></td>
                         <td style={{ textAlign: 'right' }}>{c.totalCalls.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', color: c.errorCalls > 0 ? 'var(--warning)' : 'inherit' }}>
+                        {/* amber-500 on white is ~2.1:1 — use the amber-800 text tone. */}
+                        <td
+                          style={
+                            c.errorCalls > 0
+                              ? {
+                                  textAlign: 'right',
+                                  color: 'var(--warning-text)',
+                                  background: 'var(--warning-bg)',
+                                  fontWeight: 700,
+                                }
+                              : { textAlign: 'right' }
+                          }
+                        >
                           {c.errorCalls}
                         </td>
                         <td style={{ whiteSpace: 'nowrap', fontSize: '0.85rem' }}>

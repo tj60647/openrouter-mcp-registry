@@ -31,13 +31,13 @@ export default function HomePage() {
     <div className="stack" style={{ gap: '2.5rem', marginTop: '1rem' }}>
       <div>
         <h1>OpenRouter Registry MCP</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', marginBottom: 0 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: 0 }}>
           A centralized model registry backed by OpenRouter. Prevents stale model names,
           standardizes model IDs, and exposes an MCP-compatible endpoint for AI clients.
         </p>
       </div>
 
-      <div className="card" style={{ background: 'var(--bg)', borderLeft: '3px solid var(--accent)', padding: '1rem 1.25rem' }}>
+      <div className="card" style={{ background: 'var(--bg-subtle)', borderLeft: '3px solid var(--accent)', padding: '1rem 1.25rem' }}>
         <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
           <strong style={{ color: 'var(--text)' }}>About this UI:</strong>{' '}
           The browser pages (Models, Resolve, Sync Status) query the registry database directly.

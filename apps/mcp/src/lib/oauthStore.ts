@@ -15,8 +15,10 @@ import {
   generateClientId,
   generateClientSecret,
   generateAuthorizationCode,
+  generateRegistrationAccessToken,
   hashAuthorizationCode,
   filterScopes,
+  resolveGrantTypes,
 } from './oauth';
 
 const AUTH_CODE_TTL_MS = 60_000; // authorization codes are valid for 60 seconds
@@ -32,12 +34,30 @@ interface ClientRow {
 }
 
 function rowToClient(row: ClientRow): OAuthClient {
+  const redirectUris = row.redirect_uris ?? [];
+  const grantTypes = [...(row.grant_types ?? [])];
+
+  // Legacy-compat shim: before grant_types were honoured, every dynamic
+  // registration was stored as ['authorization_code','refresh_token'] no matter
+  // how the client actually authenticated. A stored secret with no redirect_uris
+  // is a confidential service client that has been using client_credentials
+  // since the day it registered, so keep that grant working for it.
+  // Public (secret-less) clients are deliberately NOT grandfathered — handing
+  // them client_credentials is exactly the auth bypass this check closes.
+  if (
+    row.client_secret_hash &&
+    redirectUris.length === 0 &&
+    !grantTypes.includes('client_credentials')
+  ) {
+    grantTypes.push('client_credentials');
+  }
+
   return {
     clientId: row.client_id,
     clientSecretHash: row.client_secret_hash,
     clientName: row.client_name,
-    redirectUris: row.redirect_uris ?? [],
-    grantTypes: row.grant_types ?? [],
+    redirectUris,
+    grantTypes,
     tokenEndpointAuthMethod: row.token_endpoint_auth_method,
     scope: row.scope,
   };
@@ -120,37 +140,57 @@ export interface DynamicClientRegistration {
   grantTypes: string[];
   tokenEndpointAuthMethod: string;
   scope: string;
+  /** RFC 7592 management token — plaintext, returned to the caller exactly once. */
+  registrationAccessToken: string;
+  /** Unix seconds, echoed as `client_id_issued_at` (RFC 7591 §3.2.1). */
+  clientIdIssuedAt: number;
 }
 
 /**
- * Register a new dynamic client (RFC 7591). Interactive MCP clients register as
- * public clients (PKCE, no secret); pass isPublic=false to mint a confidential
- * client with a secret. Returns the plaintext secret exactly once (null for
- * public clients).
+ * Register a new dynamic client (RFC 7591).
+ *
+ * The requested `grant_types` are resolved and validated by resolveGrantTypes,
+ * which also decides public vs confidential: `client_credentials` mints a
+ * confidential client with a secret, anything else is public (PKCE, no secret).
+ * Validation lives behind this function so no caller can persist a client whose
+ * grants contradict its credentials. Throws InvalidClientMetadataError — before
+ * anything is written — when the requested metadata is refused.
+ *
+ * Returns the plaintext client secret (null for public clients) and the
+ * plaintext registration access token exactly once; only hashes are stored.
  */
 export async function createDynamicClient(params: {
   clientName: string;
   requestedScope?: string;
   redirectUris: string[];
-  isPublic: boolean;
+  requestedGrantTypes?: string[];
 }): Promise<DynamicClientRegistration> {
+  const { grantTypes, isPublic } = resolveGrantTypes(
+    params.requestedGrantTypes,
+    params.redirectUris,
+  );
+
   const clientId = generateClientId();
   const scope = filterScopes(params.requestedScope);
-  const grantTypes = ['authorization_code', 'refresh_token'];
 
-  const clientSecret = params.isPublic ? null : generateClientSecret();
+  const clientSecret = isPublic ? null : generateClientSecret();
   const clientSecretHash = clientSecret ? hashClientSecret(clientSecret) : null;
-  const authMethod = params.isPublic ? 'none' : 'client_secret_post';
+  const authMethod = isPublic ? 'none' : 'client_secret_post';
 
-  await sql`
+  const registrationAccessToken = generateRegistrationAccessToken();
+  const registrationTokenHash = hashClientSecret(registrationAccessToken);
+
+  const result = await sql`
     INSERT INTO oauth_clients (
       client_id, client_secret_hash, client_name, redirect_uris,
-      grant_types, token_endpoint_auth_method, scope
+      grant_types, token_endpoint_auth_method, scope, registration_access_token_hash
     ) VALUES (
       ${clientId}, ${clientSecretHash}, ${params.clientName}, ${params.redirectUris as unknown as string},
-      ${grantTypes as unknown as string}, ${authMethod}, ${scope}
+      ${grantTypes as unknown as string}, ${authMethod}, ${scope}, ${registrationTokenHash}
     )
+    RETURNING created_at
   `;
+  const createdAt = result.rows[0]?.['created_at'] as string | Date | undefined;
 
   return {
     clientId,
@@ -160,6 +200,59 @@ export async function createDynamicClient(params: {
     grantTypes,
     tokenEndpointAuthMethod: authMethod,
     scope,
+    registrationAccessToken,
+    clientIdIssuedAt: toUnixSeconds(createdAt),
+  };
+}
+
+/** Unix seconds for a timestamp column, falling back to now when absent. */
+function toUnixSeconds(value: string | Date | undefined | null): number {
+  const ms = value ? new Date(value).getTime() : Date.now();
+  return Math.floor((Number.isNaN(ms) ? Date.now() : ms) / 1000);
+}
+
+export interface ClientRegistration {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  grantTypes: string[];
+  tokenEndpointAuthMethod: string;
+  scope: string;
+  clientIdIssuedAt: number;
+  /** SHA-256 hash of the RFC 7592 management token; null for pre-7592 clients. */
+  registrationAccessTokenHash: string | null;
+}
+
+/**
+ * Read a dynamic client's registration record for the RFC 7592 management
+ * endpoint. Revoked clients are treated as non-existent. The returned
+ * grant_types pass through rowToClient so they match what the token endpoint
+ * will actually accept (including the legacy grandfather rule).
+ */
+export async function findClientRegistration(clientId: string): Promise<ClientRegistration | null> {
+  const result = await sql`
+    SELECT client_id, client_secret_hash, client_name, redirect_uris,
+           grant_types, token_endpoint_auth_method, scope,
+           created_at, registration_access_token_hash
+    FROM oauth_clients
+    WHERE client_id = ${clientId} AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  const row = result.rows[0] as
+    | (ClientRow & { created_at: string; registration_access_token_hash: string | null })
+    | undefined;
+  if (!row) return null;
+
+  const client = rowToClient(row);
+  return {
+    clientId: client.clientId,
+    clientName: client.clientName,
+    redirectUris: client.redirectUris,
+    grantTypes: client.grantTypes,
+    tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
+    scope: client.scope,
+    clientIdIssuedAt: toUnixSeconds(row.created_at),
+    registrationAccessTokenHash: row.registration_access_token_hash ?? null,
   };
 }
 

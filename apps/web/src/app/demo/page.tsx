@@ -181,13 +181,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function ToolCard({ tool }: { tool: AgentTool }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 0, overflow: 'hidden' }}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         style={{
           width: '100%',
-          background: open ? 'rgba(99,102,241,0.08)' : 'none',
+          background: open ? 'var(--bg-hover)' : 'transparent',
           border: 'none',
           color: 'var(--text)',
           padding: '0.4rem 0.6rem',
@@ -197,6 +197,9 @@ function ToolCard({ tool }: { tool: AgentTool }) {
           cursor: 'pointer',
           textAlign: 'left',
           fontSize: '0.8rem',
+          // Holds a code identifier — opt out of the global uppercase button type.
+          textTransform: 'none',
+          letterSpacing: 'normal',
         }}
       >
         <span
@@ -285,12 +288,8 @@ function AgentPanel({
         <select
           value={selectedModel ?? config.model}
           onChange={(e) => onModelChange(e.target.value)}
+          // Let the global input/select rule supply the border, fill and radius.
           style={{
-            width: '100%',
-            background: 'var(--bg)',
-            border: '1px solid var(--border)',
-            color: 'var(--text)',
-            borderRadius: 6,
             padding: '0.4rem 0.6rem',
             fontSize: '0.8rem',
             fontFamily: 'var(--mono)',
@@ -348,16 +347,7 @@ function AgentPanel({
           placeholder="Model default"
           value={maxOutputTokens ?? ''}
           onChange={(e) => onMaxOutputTokensChange(parseMaxTokens(e.target.value))}
-          style={{
-            width: '100%',
-            background: 'var(--bg)',
-            border: '1px solid var(--border)',
-            color: 'var(--text)',
-            borderRadius: 6,
-            padding: '0.4rem 0.6rem',
-            fontSize: '0.85rem',
-            boxSizing: 'border-box',
-          }}
+          style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem' }}
         />
       </div>
 
@@ -398,10 +388,10 @@ function AgentPanel({
             style={{
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              fontSize: '0.78rem',
+              fontSize: '0.72rem',
               lineHeight: 1.5,
               margin: 0,
-              color: 'var(--text-muted)',
+              color: 'var(--text)',
             }}
           >
             {config.systemPrompt}
@@ -416,16 +406,18 @@ function AgentPanel({
         </SectionLabel>
         {config.tools.length === 0 ? (
           <div
+            // Studio red recipe (AdminLayout.tsx:138): red-300 border, red-50
+            // fill, red-700 text — never a low-alpha tint on white.
             style={{
-              border: '1px solid rgba(239,68,68,0.35)',
-              borderRadius: 6,
+              border: '1px solid var(--error-border)',
+              borderRadius: 0,
               padding: '0.5rem 0.65rem',
-              background: 'rgba(239,68,68,0.07)',
+              background: 'var(--error-bg)',
             }}
           >
             <p
               style={{
-                color: 'var(--error, #ef4444)',
+                color: 'var(--error-text)',
                 fontSize: '0.8rem',
                 margin: '0 0 0.25rem',
                 fontWeight: 600,
@@ -459,10 +451,12 @@ function ReasoningBlock({ content }: { content: string }) {
   const wordCount = content.split(/\s+/).filter(Boolean).length;
   return (
     <div
+      // Studio renders this as a <details> under a border-t border-gray-200 with
+      // a 10px bold uppercase tracking-widest summary — no colour, just hairlines.
       style={{
         margin: '0.4rem 0',
-        border: '1px solid rgba(99,102,241,0.25)',
-        borderRadius: 6,
+        border: '1px solid var(--border)',
+        borderRadius: 0,
         overflow: 'hidden',
         fontSize: '0.85rem',
       }}
@@ -472,7 +466,7 @@ function ReasoningBlock({ content }: { content: string }) {
         onClick={() => setOpen((o) => !o)}
         style={{
           width: '100%',
-          background: 'rgba(99,102,241,0.07)',
+          background: 'var(--bg-hover)',
           border: 'none',
           color: 'var(--text-muted)',
           padding: '0.35rem 0.75rem',
@@ -481,8 +475,9 @@ function ReasoningBlock({ content }: { content: string }) {
           display: 'flex',
           alignItems: 'center',
           gap: '0.4rem',
-          fontSize: '0.8rem',
-          fontWeight: 500,
+          fontSize: '0.625rem',
+          fontWeight: 700,
+          letterSpacing: '0.12em',
         }}
       >
         <span
@@ -492,7 +487,7 @@ function ReasoningBlock({ content }: { content: string }) {
         </span>
         Reasoning
         {!open && wordCount > 0 && (
-          <span style={{ marginLeft: 'auto', opacity: 0.5, fontSize: '0.75rem' }}>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontSize: '0.625rem' }}>
             {wordCount} words
           </span>
         )}
@@ -504,8 +499,8 @@ function ReasoningBlock({ content }: { content: string }) {
             whiteSpace: 'pre-wrap',
             color: 'var(--text-muted)',
             lineHeight: 1.6,
-            background: 'rgba(99,102,241,0.03)',
-            borderTop: '1px solid rgba(99,102,241,0.15)',
+            background: 'var(--bg)',
+            borderTop: '1px solid var(--border)',
           }}
         >
           {content}
@@ -557,8 +552,8 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
     <div
       style={{
         fontSize: '0.8rem',
-        border: `1px solid ${isError ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.2)'}`,
-        borderRadius: 6,
+        border: `1px solid ${isError ? 'var(--error-border)' : 'var(--border)'}`,
+        borderRadius: 0,
         margin: '0.3rem 0',
         overflow: 'hidden',
       }}
@@ -568,9 +563,9 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
         onClick={() => hasDetails && setOpen((o) => !o)}
         style={{
           width: '100%',
-          background: open ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.05)',
+          background: isError ? 'var(--error-bg)' : open ? 'var(--bg-hover)' : 'transparent',
           border: 'none',
-          color: isError ? 'var(--error)' : 'var(--text-muted)',
+          color: isError ? 'var(--error-text)' : 'var(--text-muted)',
           padding: '0.35rem 0.75rem',
           display: 'flex',
           alignItems: 'center',
@@ -578,6 +573,9 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
           cursor: hasDetails ? 'pointer' : 'default',
           textAlign: 'left',
           fontSize: '0.8rem',
+          // Holds a code identifier — opt out of the global uppercase button type.
+          textTransform: 'none',
+          letterSpacing: 'normal',
         }}
       >
         {/* Animated spinner while running */}
@@ -604,9 +602,9 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
             </circle>
           </svg>
         ) : isError ? (
-          <span style={{ fontSize: '0.9rem', color: 'var(--error)', flexShrink: 0 }}>✗</span>
+          <span style={{ fontSize: '0.9rem', color: 'var(--error-text)', flexShrink: 0 }}>✗</span>
         ) : (
-          <span style={{ fontSize: '0.9rem', color: 'var(--success)', flexShrink: 0 }}>✓</span>
+          <span style={{ fontSize: '0.9rem', color: 'var(--success-text)', flexShrink: 0 }}>✓</span>
         )}
         <span>
           Tool: <code style={{ fontSize: '0.78rem' }}>{displayName}</code>
@@ -617,7 +615,7 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
               marginLeft: 'auto',
               transition: 'transform 0.15s',
               transform: open ? 'rotate(90deg)' : 'none',
-              opacity: 0.5,
+              color: 'var(--text-faint)',
               fontSize: '0.7rem',
             }}
           >
@@ -625,7 +623,12 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
           </span>
         )}
         {isRunning && (
-          <span style={{ marginLeft: hasDetails ? '0.25rem' : 'auto', opacity: 0.5 }}>
+          <span
+            style={{
+              marginLeft: hasDetails ? '0.25rem' : 'auto',
+              color: 'var(--text-faint)',
+            }}
+          >
             running…
           </span>
         )}
@@ -635,7 +638,7 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
         <div
           style={{
             padding: '0.5rem 0.75rem',
-            borderTop: `1px solid ${isError ? 'rgba(239,68,68,0.2)' : 'rgba(99,102,241,0.15)'}`,
+            borderTop: `1px solid ${isError ? 'var(--error-border)' : 'var(--border)'}`,
             background: 'var(--bg)',
             display: 'flex',
             flexDirection: 'column',
@@ -852,19 +855,21 @@ export default function DemoPage() {
   const modelLabel = activeModel ? activeModel.split('/').pop() || activeModel : 'Assistant';
 
   const chatTitle = messages.length > 0 ? sessionTitle(messages as unknown[]) : 'New chat';
+  // --border was previously used as a TEXT colour here; at #e0e0e0 the disabled
+  // chevrons were white-on-white. Use the studio's disabled label tone instead.
   const navBtnStyle = (disabled: boolean): React.CSSProperties => ({
-    background: 'none',
-    border: '1px solid var(--border)',
-    color: disabled ? 'var(--border)' : 'var(--text)',
+    background: 'transparent',
+    border: '1px solid var(--border-control)',
+    color: disabled ? 'var(--disabled-text)' : 'var(--text)',
     fontSize: '1.05rem',
     lineHeight: 1,
     padding: '0.2rem 0.6rem',
     cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.5 : 1,
   });
 
+  // 6.75rem === 44px sticky nav + 2rem top/bottom main padding.
   return (
-    <div className="stack" style={{ height: 'calc(100vh - 8rem)', maxHeight: 900 }}>
+    <div className="stack" style={{ height: 'calc(100vh - 6.75rem)', maxHeight: 900 }}>
       {/* Page header */}
       <div
         style={{
@@ -894,22 +899,27 @@ export default function DemoPage() {
           {activeModel ? (
             <span
               className="badge badge-info"
-              style={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}
+              style={{
+                whiteSpace: 'nowrap',
+                fontSize: '0.7rem',
+                fontFamily: 'var(--mono)',
+                textTransform: 'none',
+                letterSpacing: 'normal',
+              }}
             >
               {activeModel}
             </span>
           ) : (
             <PulsingIndicator label="Loading model" />
           )}
+          {/* Studio toggle pair: active = solid black, inactive = ghost. */}
           <button
             type="button"
+            className={showPanel ? undefined : 'btn-ghost'}
             onClick={() => setShowPanel((p) => !p)}
             style={{
-              background: showPanel ? 'rgba(99,102,241,0.15)' : 'none',
-              border: '1px solid var(--border)',
-              color: showPanel ? 'var(--accent)' : 'var(--text-muted)',
-              fontSize: '0.8rem',
-              padding: '0.3rem 0.7rem',
+              fontSize: '0.625rem',
+              padding: '0.4rem 0.7rem',
               whiteSpace: 'nowrap',
             }}
           >
@@ -936,14 +946,8 @@ export default function DemoPage() {
               type="button"
               onClick={newChat}
               title="Start a new chat"
-              style={{
-                background: 'none',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-                fontSize: '0.78rem',
-                padding: '0.3rem 0.7rem',
-                whiteSpace: 'nowrap',
-              }}
+              className="btn-ghost"
+              style={{ padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
             >
               ＋ New chat
             </button>
@@ -963,7 +967,7 @@ export default function DemoPage() {
             <span
               title={chatTitle}
               style={{
-                fontSize: '0.78rem',
+                fontSize: '0.7rem',
                 color: 'var(--text-muted)',
                 maxWidth: 240,
                 overflow: 'hidden',
@@ -989,13 +993,8 @@ export default function DemoPage() {
               onClick={deleteCurrent}
               aria-label="Delete this chat"
               title="Delete this chat"
-              style={{
-                background: 'none',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-                fontSize: '0.85rem',
-                padding: '0.3rem 0.55rem',
-              }}
+              className="btn-ghost"
+              style={{ fontSize: '0.85rem', padding: '0.25rem 0.55rem', lineHeight: 1 }}
             >
               🗑
             </button>
@@ -1007,6 +1006,7 @@ export default function DemoPage() {
               ref={scrollContainerRef}
               onScroll={handleScroll}
               className="card"
+              // Studio chat scroller sits on bg-[#fafafa] so white bubbles read.
               style={{
                 height: '100%',
                 overflowY: 'auto',
@@ -1014,6 +1014,7 @@ export default function DemoPage() {
                 flexDirection: 'column',
                 gap: '1rem',
                 padding: '1.25rem',
+                background: 'var(--bg-surface)',
               }}
             >
               {messages.length === 0 && !loading && (
@@ -1021,7 +1022,7 @@ export default function DemoPage() {
                   <p style={{ marginBottom: '0.5rem', fontSize: '0.95rem' }}>
                     Imagine you&apos;re an agent that needs to build another agent.
                   </p>
-                  <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem', opacity: 0.75 }}>
+                  <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                     Ask me to find the best model, write a system prompt, or configure parameters
                     for any kind of agent you want to create. Try the chips below to get started ↓
                   </p>
@@ -1056,15 +1057,19 @@ export default function DemoPage() {
                     </div>
 
                     {isUser ? (
+                      // Studio bubble pair (ChatInterface.tsx:156-160): user is a
+                      // solid black fill, assistant is white with a hairline.
+                      // Corners are squared per the spec's zero-radius rule.
                       <div
                         style={{
-                          background: 'rgba(99,102,241,0.15)',
-                          border: '1px solid rgba(99,102,241,0.3)',
-                          borderRadius: '12px 12px 2px 12px',
+                          background: 'var(--accent)',
+                          border: '1px solid var(--accent)',
+                          borderRadius: 0,
+                          color: '#fff',
                           padding: '0.6rem 0.9rem',
                           whiteSpace: 'pre-wrap',
                           lineHeight: 1.6,
-                          fontSize: '0.925rem',
+                          fontSize: '0.875rem',
                           maxWidth: '80%',
                         }}
                       >
@@ -1076,12 +1081,12 @@ export default function DemoPage() {
                       <>
                         <div
                           style={{
-                            background: 'var(--bg-hover)',
+                            background: 'var(--bg)',
                             border: '1px solid var(--border)',
-                            borderRadius: '12px 12px 12px 2px',
+                            borderRadius: 0,
                             padding: '0.75rem 1rem',
                             lineHeight: 1.6,
-                            fontSize: '0.925rem',
+                            fontSize: '0.875rem',
                             maxWidth: '90%',
                             minWidth: 0,
                           }}
@@ -1141,15 +1146,15 @@ export default function DemoPage() {
                                     gap: '0.25rem',
                                     fontSize: '0.65rem',
                                     fontFamily: 'var(--mono)',
-                                    color: 'var(--accent)',
-                                    background: 'rgba(99,102,241,0.1)',
-                                    border: '1px solid rgba(99,102,241,0.25)',
-                                    borderRadius: 4,
+                                    color: 'var(--text)',
+                                    background: 'var(--bg-hover)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 0,
                                     padding: '0.1rem 0.45rem',
                                     whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  <Wrench size={9} style={{ opacity: 0.65, flexShrink: 0 }} aria-hidden />
+                                  <Wrench size={9} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
                                   {name}
                                 </span>
                               ))}
@@ -1157,8 +1162,7 @@ export default function DemoPage() {
                                 <span
                                   style={{
                                     fontSize: '0.65rem',
-                                    color: 'var(--text-muted)',
-                                    opacity: 0.55,
+                                    color: 'var(--text-faint)',
                                     fontFamily: 'var(--mono)',
                                     marginLeft: uniqueTools.length > 0 ? '0.15rem' : 0,
                                   }}
@@ -1189,22 +1193,25 @@ export default function DemoPage() {
                   setIsAtBottom(true);
                 }}
                 aria-label="Scroll to bottom"
+                // Flat: the drop shadow was the only elevation in the app and
+                // the spec bans shadows — a black hairline carries it instead.
                 style={{
                   position: 'absolute',
                   bottom: '0.75rem',
                   left: '50%',
                   transform: 'translateX(-50%)',
                   zIndex: 10,
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-muted)',
-                  borderRadius: '9999px',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border-strong)',
+                  color: 'var(--text)',
+                  borderRadius: 0,
                   padding: '0.35rem 1rem',
-                  fontSize: '0.8rem',
+                  fontSize: '0.625rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.12em',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.35rem',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
                 }}
               >
                 ↓ Scroll to bottom
@@ -1232,16 +1239,7 @@ export default function DemoPage() {
               style={{ resize: 'none', flex: 1 }}
             />
             {loading ? (
-              <button
-                type="button"
-                onClick={stop}
-                style={{
-                  flexShrink: 0,
-                  background: 'rgba(239,68,68,0.12)',
-                  border: '1px solid rgba(239,68,68,0.3)',
-                  color: 'var(--error)',
-                }}
-              >
+              <button type="button" className="btn-danger" onClick={stop} style={{ flexShrink: 0 }}>
                 ■ Stop
               </button>
             ) : (
@@ -1270,17 +1268,20 @@ export default function DemoPage() {
                 onClick={() => {
                   void sendMessage({ text: p.text }, { body: chatBody });
                 }}
+                // Studio quick prompts: bg-gray-100, 10px bold uppercase,
+                // square, disabled expressed as colour rather than opacity.
                 style={{
                   flexShrink: 0,
-                  background: 'var(--bg)',
+                  background: loading ? 'var(--disabled-bg)' : 'var(--bg-hover)',
                   border: '1px solid var(--border)',
-                  color: 'var(--text-muted)',
-                  borderRadius: 20,
-                  padding: '0.3rem 0.75rem',
-                  fontSize: '0.78rem',
+                  color: loading ? 'var(--disabled-text)' : 'var(--text)',
+                  borderRadius: 0,
+                  padding: '0.35rem 0.75rem',
+                  fontSize: '0.625rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
                   cursor: loading ? 'not-allowed' : 'pointer',
                   whiteSpace: 'nowrap',
-                  opacity: loading ? 0.5 : 1,
                 }}
               >
                 {p.label}

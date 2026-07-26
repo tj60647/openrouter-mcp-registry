@@ -2,16 +2,110 @@ import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ModelRegistry } from '@openrouter-mcp/shared';
+import type { Model } from '@openrouter-mcp/shared';
 import {
   getModels,
+  getModelsCount,
+  getModelCounts,
   getModelById,
   getSyncStatus,
   getSyncHistory,
   findModelsByCriteria,
+  findModelsByCriteriaCount,
   semanticSearchModels,
 } from './db';
 import { generateEmbedding } from './embeddings';
 import { recordUsage } from './oauthStore';
+
+/** Fields dropped from list-style responses unless `verbose` is set — they dominate payload size. */
+const VERBOSE_ONLY_FIELDS = ['description', 'metadata'] as const;
+
+/**
+ * Trims model records returned by the list-style tools so a single page does
+ * not blow up the caller's context window.
+ *
+ * - `fields` (when non-empty) wins: only those fields are returned, in the
+ *   order given, with `id` always present. Unknown names are ignored.
+ * - Otherwise `verbose: true` returns the full record and `verbose: false`
+ *   (the default) drops `description` and `metadata`.
+ *
+ * `get_model`, `resolve_model`, `compare_models` and the `registry://`
+ * resources deliberately do NOT use this — they always return full records.
+ */
+function projectModels(models: Model[], opts: { verbose: boolean; fields?: string[] }): unknown[] {
+  const { verbose, fields } = opts;
+
+  if (fields && fields.length > 0) {
+    return models.map((model) => {
+      const source = model as unknown as Record<string, unknown>;
+      const picked: Record<string, unknown> = { id: model.id };
+      for (const field of fields) {
+        if (field !== 'id' && field in source) picked[field] = source[field];
+      }
+      return picked;
+    });
+  }
+
+  if (verbose) return models;
+
+  return models.map((model) => {
+    const trimmed: Record<string, unknown> = { ...model };
+    for (const field of VERBOSE_ONLY_FIELDS) delete trimmed[field];
+    return trimmed;
+  });
+}
+
+// ── Shared tool argument schemas ─────────────────────────────────────────────
+// Built by factories so each tool gets its own schema instance and therefore a
+// self-contained JSON schema, without duplicating the definitions.
+
+/** Sort columns accepted by the list-style tools, in snake_case and camelCase. */
+const SORT_BY_VALUES = [
+  'id', 'display_name', 'provider',
+  'context_length', 'max_completion_tokens',
+  'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
+  'created_at',
+  // camelCase spellings of exactly the same columns
+  'displayName', 'contextLength', 'maxCompletionTokens',
+  'inputPricePer1k', 'outputPricePer1k', 'imagePricePer1k', 'createdAt',
+] as const;
+
+function sortByArg() {
+  return z
+    .enum(SORT_BY_VALUES)
+    .optional()
+    .default('id')
+    .describe(
+      'Column to sort results by. Both snake_case and camelCase spellings are accepted and mean the same thing (e.g. created_at or createdAt, input_price_per_1k or inputPricePer1k).'
+    );
+}
+
+function sortDirArg() {
+  return z
+    .enum(['asc', 'desc'])
+    .optional()
+    .default('asc')
+    .describe('Sort direction. Use desc with created_at for newest-first results.');
+}
+
+function verboseArg() {
+  return z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'Set true to include description and metadata. Default false omits both from every returned record to keep the payload small.'
+    );
+}
+
+function fieldsArg() {
+  return z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Explicit projection: camelCase Model field names to return (e.g. ["displayName","contextLength","inputPricePer1k"]). Takes precedence over verbose. "id" is always included and unknown field names are ignored.'
+    );
+}
 
 /**
  * Wrap `server.tool` so every tool call records a usage row attributed to the
@@ -58,41 +152,46 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: list_models
   server.tool(
     'list_models',
-    'List available models in the registry with optional filtering. Use the query param to search by name, ID, or provider.',
+    'List available models in the registry with optional filtering. Use the query param to search by name, ID, or provider. The response reports both count (records in this page) and total (records matching the filter, ignoring limit/offset).',
     {
-      limit: z.number().int().min(1).max(500).optional().default(500),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .default(50)
+        .describe('Maximum records to return in one page. Defaults to 50; raise up to 500 for bulk pulls.'),
       offset: z.number().int().min(0).optional().default(0),
       provider: z.string().optional(),
       query: z.string().optional().describe('Text search across model ID, display name, and provider'),
-      sortBy: z
-        .enum([
-          'id', 'display_name', 'provider',
-          'context_length', 'max_completion_tokens',
-          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
-          'created_at',
-        ])
-        .optional()
-        .default('id')
-        .describe('Column to sort results by'),
-      sortDir: z
-        .enum(['asc', 'desc'])
-        .optional()
-        .default('asc')
-        .describe('Sort direction. Use desc with created_at for newest-first results.'),
+      sortBy: sortByArg(),
+      sortDir: sortDirArg(),
       availableOnly: z
         .boolean()
         .optional()
         .default(false)
-        .describe('When true, only return models that were present in the most recent OpenRouter sync'),
+        .describe(
+          'When true, exclude retired models (is_available = false). Default false: retired models ARE included, which is why list_models can return more records than get_registry_status.recordCount.'
+        ),
+      verbose: verboseArg(),
+      fields: fieldsArg(),
     },
-    async ({ limit, offset, provider, query, sortBy, sortDir, availableOnly }) => {
+    async ({ limit, offset, provider, query, sortBy, sortDir, availableOnly, verbose, fields }) => {
       try {
-        const models = await getModels({ limit, offset, provider, query, sortBy, sortDir, availableOnly });
+        const [models, total] = await Promise.all([
+          getModels({ limit, offset, provider, query, sortBy, sortDir, availableOnly }),
+          getModelsCount({ provider, query, availableOnly }),
+        ]);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ models, count: models.length }, null, 2),
+              text: JSON.stringify(
+                { models: projectModels(models, { verbose, fields }), count: models.length, total },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -168,35 +267,31 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: search_models
   server.tool(
     'search_models',
-    'Search for models by name, ID, or provider substring. Returns matching models sorted by the chosen column.',
+    'Search for models by name, ID, or provider substring. Returns matching models sorted by the chosen column. The response reports both count (records in this page) and total (records matching the search, ignoring limit/offset).',
     {
       query: z.string().min(1).max(256).describe('Search term to match against model ID, display name, or provider'),
       limit: z.number().int().min(1).max(100).optional().default(20),
       offset: z.number().int().min(0).optional().default(0),
-      sortBy: z
-        .enum([
-          'id', 'display_name', 'provider',
-          'context_length', 'max_completion_tokens',
-          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
-          'created_at',
-        ])
-        .optional()
-        .default('id')
-        .describe('Column to sort results by'),
-      sortDir: z
-        .enum(['asc', 'desc'])
-        .optional()
-        .default('asc')
-        .describe('Sort direction. Use desc with created_at for newest-first results.'),
+      sortBy: sortByArg(),
+      sortDir: sortDirArg(),
+      verbose: verboseArg(),
+      fields: fieldsArg(),
     },
-    async ({ query, limit, offset, sortBy, sortDir }) => {
+    async ({ query, limit, offset, sortBy, sortDir, verbose, fields }) => {
       try {
-        const models = await getModels({ limit, offset, query, sortBy, sortDir });
+        const [models, total] = await Promise.all([
+          getModels({ limit, offset, query, sortBy, sortDir }),
+          getModelsCount({ query }),
+        ]);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ models, count: models.length }, null, 2),
+              text: JSON.stringify(
+                { models: projectModels(models, { verbose, fields }), count: models.length, total },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -210,18 +305,18 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: find_models_by_criteria
   server.tool(
     'find_models_by_criteria',
-    'Filter models by budget, context, and capability constraints. All parameters are optional — omit any you don\'t care about. Models with NULL prices are always included (treated as free/unknown).',
+    'Filter models by budget, context, and capability constraints. All parameters are optional — omit any you don\'t care about. Models with NULL prices are always included (treated as free/unknown). The response reports both count (records in this page) and total (records matching the filter, ignoring limit/offset).',
     {
       maxInputPricePer1k: z
         .number()
         .nonnegative()
         .optional()
-        .describe('Maximum input price per 1,000 tokens (USD)'),
+        .describe('Maximum input price, in USD per 1,000 tokens. Registry prices are always USD per 1,000 tokens.'),
       maxOutputPricePer1k: z
         .number()
         .nonnegative()
         .optional()
-        .describe('Maximum output price per 1,000 tokens (USD)'),
+        .describe('Maximum output price, in USD per 1,000 tokens. Registry prices are always USD per 1,000 tokens.'),
       minContextLength: z
         .number()
         .int()
@@ -231,42 +326,32 @@ export async function initMcpServer(server: McpServer): Promise<void> {
       modality: z
         .string()
         .optional()
-        .describe('Filter by modality string (e.g. "text+image->text" for vision models, "text->text" for text-only). Partial match supported.'),
+        .describe(
+          'Filter by modality, which OpenRouter writes as "inputs->outputs" with "+"-separated modalities on each side (e.g. "text->text", "text+image->text", "text+image+file->text", "text->image"). Matching is a case-insensitive SUBSTRING match over the WHOLE string, including the "->". To find vision models you must match the LEFT (input) side — use "image->" (or "text+image->text"); "text->image" is an image GENERATOR, not a vision model.'
+        ),
       limit: z.number().int().min(1).max(200).optional().default(50),
       offset: z.number().int().min(0).optional().default(0),
-      sortBy: z
-        .enum([
-          'id', 'display_name', 'provider',
-          'context_length', 'max_completion_tokens',
-          'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
-          'created_at',
-        ])
-        .optional()
-        .default('id')
-        .describe('Column to sort results by'),
-      sortDir: z
-        .enum(['asc', 'desc'])
-        .optional()
-        .default('asc')
-        .describe('Sort direction. Use desc with created_at for newest-first results.'),
+      sortBy: sortByArg(),
+      sortDir: sortDirArg(),
+      verbose: verboseArg(),
+      fields: fieldsArg(),
     },
-    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy, sortDir }) => {
+    async ({ maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy, sortDir, verbose, fields }) => {
       try {
-        const models = await findModelsByCriteria({
-          maxInputPricePer1k,
-          maxOutputPricePer1k,
-          minContextLength,
-          modality,
-          limit,
-          offset,
-          sortBy,
-          sortDir,
-        });
+        const criteria = { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality };
+        const [models, total] = await Promise.all([
+          findModelsByCriteria({ ...criteria, limit, offset, sortBy, sortDir }),
+          findModelsByCriteriaCount(criteria),
+        ]);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ models, count: models.length }, null, 2),
+              text: JSON.stringify(
+                { models: projectModels(models, { verbose, fields }), count: models.length, total },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -345,8 +430,10 @@ export async function initMcpServer(server: McpServer): Promise<void> {
         .describe('Natural language description of the kind of model you are looking for'),
       limit: z.number().int().min(1).max(50).optional().default(10),
       offset: z.number().int().min(0).optional().default(0),
+      verbose: verboseArg(),
+      fields: fieldsArg(),
     },
-    async ({ query, limit, offset }) => {
+    async ({ query, limit, offset, verbose, fields }) => {
       try {
         const openrouterKey = process.env['OPENROUTER_API_KEY'];
         if (!openrouterKey) {
@@ -366,7 +453,11 @@ export async function initMcpServer(server: McpServer): Promise<void> {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ models, count: models.length }, null, 2),
+              text: JSON.stringify(
+                { models: projectModels(models, { verbose, fields }), count: models.length },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -380,16 +471,27 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: get_registry_status
   server.tool(
     'get_registry_status',
-    'Get the current sync status of the model registry (last sync time, record count, any errors)',
+    'Get the current sync status of the model registry (last sync time, record counts, any errors). recordCount is the number of models in the last SUCCESSFUL sync, so it excludes retired models; totalCount is the live number of rows in the registry and therefore includes retired models. totalCount = availableCount + retiredCount, and list_models with the default availableOnly=false can return up to totalCount records.',
     {},
     async () => {
       try {
-        const status = await getSyncStatus();
+        const [status, counts] = await Promise.all([getSyncStatus(), getModelCounts()]);
+        // Live counts are folded into the status object so callers can
+        // reconcile them against recordCount. status stays null when no sync
+        // has ever been recorded.
+        const payload = status
+          ? {
+              ...status,
+              totalCount: counts.total,
+              availableCount: counts.available,
+              retiredCount: counts.retired,
+            }
+          : null;
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ status }, null, 2),
+              text: JSON.stringify({ status: payload }, null, 2),
             },
           ],
         };

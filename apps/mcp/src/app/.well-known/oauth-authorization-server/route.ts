@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIssuerUrl } from '../../../lib/oauth';
+import { getIssuerUrl, SUPPORTED_GRANT_TYPES } from '../../../lib/oauth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,9 @@ export async function GET(): Promise<NextResponse> {
     issuer,
     authorization_endpoint: `${issuer}/api/oauth/authorize`,
     token_endpoint: `${issuer}/api/oauth/token`,
-    grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+    // Shared with the registration/token endpoints so what is advertised is
+    // exactly what is accepted.
+    grant_types_supported: [...SUPPORTED_GRANT_TYPES],
     response_types_supported: ['code'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],

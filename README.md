@@ -62,6 +62,22 @@ openrouter-mcp-registry/
 └── pnpm-workspace.yaml
 ```
 
+### Two-host layout
+
+The two apps deploy to **two different origins**, and it matters which one you hand to an MCP client:
+
+| Host                          | Serves                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| **API host** (`apps/mcp`)     | `/api/mcp`, `/api/oauth/*`, `/.well-known/*`, `/api/cron/sync`, the REST API                |
+| **Docs host** (`apps/web`)    | `/mcp-info` (the integration reference), `/models`, `/demo`, `/admin`                        |
+
+Each host redirects the other's paths instead of returning `404`, so a client handed the wrong URL still works:
+
+- `apps/web` → when `NEXT_PUBLIC_MCP_URL` is set, it **308**-redirects `/api/mcp`, `/api/mcp/*`, `/api/oauth/*` and all of `/.well-known/*` to the API host. `308` preserves the request method and body, so a JSON-RPC `POST /api/mcp` and a form-encoded `POST /api/oauth/token` survive the hop — the client must follow redirects.
+- `apps/mcp` → when `NEXT_PUBLIC_WEB_URL` is set, it 308-redirects `/mcp-info` to the docs host.
+
+Both redirect sets live in the apps' `next.config.ts`, are emitted only when the corresponding env var is set (single-host local dev emits none), and are baked in at build time — changing the variable on an existing deployment requires a redeploy. Point clients at the API host directly to avoid the extra round trip.
+
 ---
 
 ## REST API
@@ -86,7 +102,9 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/mcp`               | MCP Streamable HTTP endpoint (OAuth 2.1 protected in production) |
 | `GET`  | `/api/oauth/authorize`   | OAuth 2.1 authorization endpoint (authorization code + PKCE, auto-approved) |
 | `POST` | `/api/oauth/token`       | OAuth token endpoint (`authorization_code`, `refresh_token`, `client_credentials`) |
-| `POST` | `/api/oauth/register`    | OAuth dynamic client registration (RFC 7591)                    |
+| `POST` | `/api/oauth/register`    | OAuth dynamic client registration (RFC 7591); honours and echoes `grant_types` |
+| `GET`  | `/api/oauth/register/{client_id}` | Read a client's own registration (RFC 7592; bearer `registration_access_token`) |
+| `DELETE` | `/api/oauth/register/{client_id}` | Delete (revoke) a client's own registration; returns `204` |
 | `GET`  | `/.well-known/oauth-authorization-server` | OAuth Authorization Server metadata (RFC 8414) |
 | `GET`  | `/.well-known/oauth-protected-resource` | OAuth Protected Resource metadata (RFC 9728)  |
 | `GET`/`POST` | `/api/chat`        | MCP-owned demo chat endpoint; owns OpenRouter call and registry tool execution |
@@ -116,40 +134,60 @@ Connect any MCP-compatible client to `POST /api/mcp`. The server exposes **tools
 
 ### Tools
 
-| Tool                      | Description                                     | Parameters                                                                                                          |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `list_models`             | List all registry models                        | `limit`, `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly`                                        |
-| `resolve_model`           | Resolve and look up a model by ID               | `input: string`                                                                                                     |
-| `get_model`               | Get full details for a model                    | `id: string`                                                                                                        |
-| `search_models`           | Search by name, ID, or provider                 | `query: string`, `limit`, `offset`, `sortBy`, `sortDir`                                                             |
-| `find_models_by_criteria` | Filter by budget, context, and modality         | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit`, `offset`, `sortBy`, `sortDir` |
-| `compare_models`          | Compare 2–5 models side-by-side                 | `ids: string[]`                                                                                                     |
-| `semantic_search`         | Find models by natural language similarity      | `query: string`, `limit`, `offset`                                                                                  |
-| `get_registry_status`     | Current sync state                              | —                                                                                                                   |
-| `get_sync_history`        | Recent sync attempts with success/error details | `limit`                                                                                                             |
+| Tool                      | Description                                     | Parameters                                                                                                                                         | Returns                              |
+| ------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `list_models`             | List all registry models                        | `limit` (default **50**, max 500), `offset`, `provider`, `query`, `sortBy`, `sortDir`, `availableOnly`, `verbose`, `fields`                          | `{ models, count, total }`           |
+| `resolve_model`           | Resolve and look up a model by ID               | `input: string`                                                                                                                                      | full record                          |
+| `get_model`               | Get full details for a model                    | `id: string`                                                                                                                                         | full record                          |
+| `search_models`           | Search by name, ID, or provider                 | `query: string`, `limit` (default 20, max 100), `offset`, `sortBy`, `sortDir`, `verbose`, `fields`                                                   | `{ models, count, total }`           |
+| `find_models_by_criteria` | Filter by budget, context, and modality         | `maxInputPricePer1k`, `maxOutputPricePer1k`, `minContextLength`, `modality`, `limit` (default 50, max 200), `offset`, `sortBy`, `sortDir`, `verbose`, `fields` | `{ models, count, total }`  |
+| `compare_models`          | Compare 2–5 models side-by-side                 | `ids: string[]`                                                                                                                                      | `{ comparison }`                     |
+| `semantic_search`         | Find models by natural language similarity      | `query: string`, `limit` (default 10, max 50), `offset`, `verbose`, `fields`                                                                         | `{ models, count }` (no `total`)     |
+| `get_registry_status`     | Current sync state + live row counts            | —                                                                                                                                                    | `{ status }` (see below)             |
+| `get_sync_history`        | Recent sync attempts with success/error details | `limit` (default 50, max 200)                                                                                                                        | `{ history, count }`                 |
+
+Argument conventions:
+
+- Filter arguments and returned record fields are **camelCase** (`maxInputPricePer1k`, `availableOnly`, `contextLength`). `sortBy` is the one exception: it accepts **both** snake_case and camelCase spellings for the same column (`created_at` ≡ `createdAt`, `input_price_per_1k` ≡ `inputPricePer1k`, and so on for `display_name`, `context_length`, `max_completion_tokens`, `output_price_per_1k`, `image_price_per_1k`). Default `id`.
+- `verbose` (boolean, default `false`) omits `description` and `metadata` from every returned record — they dominate payload size. Pass `verbose: true` to get them back.
+- `fields` (string array) is an explicit projection using camelCase `Model` field names. It wins over `verbose`, always includes `id`, and silently ignores unknown names.
+- `verbose`/`fields` apply only to `list_models`, `search_models`, `find_models_by_criteria` and `semantic_search`. `get_model`, `resolve_model`, `compare_models` and the `registry://` resources always return full records.
+- Prices are **USD per 1,000 tokens** throughout.
+- `modality` is matched as a case-insensitive substring of OpenRouter's whole `inputs->outputs` string. To find vision models match the **input** side (`image->`); `text->image` is an image *generator*.
+
+Reconciling counts:
+
+- `count` = records in **this page** (affected by `limit`/`offset`).
+- `total` = records matching the filter/search/criteria, **ignoring** `limit`/`offset`.
+- `get_registry_status` returns `{ lastSuccessfulSync, lastAttemptedSync, lastError, recordCount, totalCount, availableCount, retiredCount }`. `recordCount` is how many models OpenRouter returned in the last **successful** sync; `totalCount` is the live row count and therefore **includes retired models**, with `totalCount = availableCount + retiredCount`.
+- `list_models` returning a larger `total` than `recordCount` is expected: `availableOnly` defaults to `false`, so retired rows are included.
 
 Model lifecycle semantics:
 
-- `isAvailable = true` means the model was present in the latest OpenRouter sync.
-- `isAvailable = false` means the model is unavailable in the latest registry sync. This is inferred from sync absence and is not always a provider-declared retirement notice.
-- `providerExpirationAt` is the scheduled provider expiry date from OpenRouter when available.
-- `retiredAt` is the first sync where this registry observed the model missing.
-- `lastSeenAt` is the most recent successful sync where the model was still present.
+- `isAvailable` is the **authoritative** flag and the only field the query layer filters on (`availableOnly: true` → `is_available = TRUE`). `true` means the model was present in the latest OpenRouter sync; `false` means it was absent, which is inferred from sync absence and is not always a provider-declared retirement notice.
+- `retiredAt` is a timestamp annotation only, never a filter. It records when the **current** retirement episode began; if a model reappears the upsert resets it to `null`, so it is not a "was ever retired" history.
+- `lastSeenAt` is the most recent successful sync where the model was still present. It is written from the same timestamp as `fetchedAt`, so for any row a sync touches the two are identical; for a retired model both freeze at the last sync where the model was present.
+- `isAvailable` and `retiredAt` cannot disagree: both writers set them together inside one transaction, which rolls back as a unit on failure.
+- `providerExpirationAt` is the scheduled provider expiry date from OpenRouter when available — independent of the three fields above.
 
 Notes:
 
 - The web UI now uses the term "Unavailable" instead of "Retired" because sync absence and provider-declared expiry are distinct states.
-- The `compare_models` MCP tool now includes lifecycle fields such as `providerExpirationAt`, `lastSeenAt`, `retiredAt`, and `isAvailable` in its response.
+- The `compare_models` MCP tool includes lifecycle fields such as `providerExpirationAt`, `lastSeenAt`, `retiredAt`, and `isAvailable` in its response.
+- **Known gap:** the retirement sweep in `db.ts::upsertModels` runs per provider and only over providers present in the current sync. If an *entire* provider disappears from OpenRouter's catalogue, its models are never swept and stay `isAvailable: true` with `retiredAt: null`. This is why `availableCount` can exceed `recordCount`.
+- A small number of rows retired before the `retired_at` column existed had it backfilled to equal `fetched_at`, so for those `retiredAt` is the last sync the model *was* present rather than the first sync it was missing. They are identifiable by `retiredAt === lastSeenAt`.
 
 ### Resources
 
 Read-only data accessible via `resources/read`:
 
-| URI                      | Description                                        |
-| ------------------------ | -------------------------------------------------- |
-| `registry://models`      | Full model list (up to 500)                        |
-| `registry://status`      | Sync status (last sync time, record count, errors) |
-| `registry://models/{id}` | Details for a specific model (URL-encode the ID)   |
+| URI                      | Description                                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `registry://models`      | Full model list (up to 500, unfiltered, includes retired models)                                       |
+| `registry://status`      | Sync status (`lastSuccessfulSync`, `lastAttemptedSync`, `lastError`, `recordCount`) — no live counts   |
+| `registry://models/{id}` | Details for a specific model (URL-encode the ID)                                                       |
+
+Resources are never projected: they always return full records including `description` and `metadata`.
 
 ### Prompts
 
@@ -253,8 +291,12 @@ In **Settings → Environment Variables**:
 | `MCP_CLIENT_ID`       | ✅ for web demo  | Static OAuth client id shared with `apps/web` for the `/demo` chatbot                                            |
 | `MCP_CLIENT_SECRET`   | ✅ for web demo  | Static OAuth client secret shared with `apps/web`; server-side only                                              |
 | `NEXT_PUBLIC_MCP_URL` | ❌               | Public canonical MCP URL; set for custom domains, otherwise `VERCEL_URL` is used                                 |
+| `NEXT_PUBLIC_WEB_URL` | ❌               | Public URL of the docs host (`apps/web`). When set, `/mcp-info` 308-redirects there instead of 404ing            |
+| `OAUTH_REGISTRATION_ACCESS_TOKEN` | ❌   | When set, `POST /api/oauth/register` requires `Authorization: Bearer <this value>`; unset keeps registration open |
 
 #### 4. Run database migrations
+
+> **Deploy ordering:** run `pnpm db:migrate` **before** the new `apps/mcp` build serves traffic. Client registration inserts `oauth_clients.registration_access_token_hash`, so without that column `POST /api/oauth/register` fails. Existing rows get `NULL` and simply cannot use the RFC 7592 management endpoint (they always get `401` there); the admin panel's revoke action still covers them.
 
 After the first deploy, run migrations against your Neon database:
 
@@ -271,7 +313,9 @@ pnpm db:seed
 
 #### 5. Cron job
 
-`apps/mcp/vercel.json` configures a daily cron at `0 0 * * *` (midnight UTC) that calls `/api/cron/sync`. When `CRON_SECRET` is set on the project, Vercel sends it to the cron invocation as a Bearer token.
+`apps/mcp/vercel.json` configures a daily cron at `0 0 * * *` (midnight UTC) that calls `/api/cron/sync`. When `CRON_SECRET` is set on the project, Vercel sends it to the cron invocation as a Bearer token. The same route can be triggered on demand with `curl -sS <mcp-host>/api/cron/sync -H "Authorization: Bearer $CRON_SECRET"` (a `GET`), or from the admin panel's **Sync** action.
+
+Each sync writes **two** `sync_history` rows: a start marker (`success: false`, `record_count: null`, `error: null`) written before OpenRouter is contacted, then the real outcome. Only the second row reflects whether the sync worked — `get_sync_history` shows both.
 
 > **Note:** You must set `CRON_SECRET` yourself — Vercel does **not** create it automatically (the Neon integration does not provide it). In production the cron route returns `503` ("Cron auth not configured") when the secret is missing and `NODE_ENV=production`, so the job fails on every run until you set it. Generate one with `openssl rand -hex 32`, add it to the project's Production environment, and redeploy so the new deployment picks it up.
 
@@ -295,7 +339,7 @@ This is a human-facing browser for the registry. The **`/demo` chatbot** posts t
 | Variable               | Required           | Description                                                                                                                                       |
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ADMIN_SESSION_SECRET` | ✅ if admin UI is enabled | Random 32-byte hex secret for web-owned admin session cookies (`openssl rand -hex 32`)                                                       |
-| `NEXT_PUBLIC_MCP_URL`  | ✅                 | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — browser-visible URL only                                      |
+| `NEXT_PUBLIC_MCP_URL`  | ✅                 | Public URL of your deployed `mcp` app (e.g. `https://your-mcp-app.vercel.app`) — browser-visible URL only. Also gates and targets the 308 redirects for `/api/mcp`, `/api/oauth/*` and `/.well-known/*`; unset means no redirects are emitted |
 | `MCP_CLIENT_ID`        | ✅ in preview/prod | Server-side OAuth client id used by web route handlers to obtain an MCP access token; must match `apps/mcp`                                    |
 | `MCP_CLIENT_SECRET`    | ✅ in preview/prod | Server-side OAuth client secret used by web route handlers; must match `apps/mcp` and must not be `NEXT_PUBLIC`                                |
 | `NEXT_PUBLIC_APP_URL`  | ❌                 | Public URL of this web app; browser-visible URL only                                                                                            |
@@ -386,6 +430,29 @@ Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_con
 
 Interactive clients don't need this — they authenticate automatically (above). This path is for **non-interactive / server-side clients** that can't run a browser OAuth flow. In production, `apps/mcp` has `OAUTH_JWT_SECRET` configured, so `/api/mcp` requires a bearer token with the `mcp:read` scope. Trusted server-side clients request a short-lived token from `POST /api/oauth/token` using the client-credentials grant with `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET`; browser code must not receive these credentials.
 
+```bash
+# 1. Get a token (form-encoded or JSON; credentials in the body or as HTTP Basic)
+curl -sS -X POST https://your-mcp-app.vercel.app/api/oauth/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=client_credentials' \
+  -d 'client_id=YOUR_CLIENT_ID' \
+  -d 'client_secret=YOUR_CLIENT_SECRET' \
+  -d 'scope=mcp:read'
+# → {"access_token":"...","token_type":"Bearer","expires_in":3600,"scope":"mcp:read"}
+
+# 2. Call a tool. BOTH media types must appear in Accept, or the transport returns 406.
+curl -sS -X POST https://your-mcp-app.vercel.app/api/mcp \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_models","arguments":{"limit":5}}}'
+# → 200 text/event-stream, one frame: event: message / data: {"result":{...},"jsonrpc":"2.0","id":1}
+```
+
+`expires_in` is `3600`. **Cache the token** and reuse it until it is close to expiry — the token endpoint is rate-limited to 20 requests per minute per IP, and the client-credentials grant issues no refresh token.
+
+The endpoint is stateless: `initialize` and `notifications/initialized` are **not** required before `tools/call`, no `Mcp-Session-Id` is ever returned, and successful responses are always `text/event-stream` regardless of `Accept`. Tool failures come back as HTTP `200` with `result.isError: true`, so check that field rather than the status code. `GET`/`DELETE` on `/api/mcp` return `405`. Full transport details are on the `/mcp-info` page of the docs host.
+
 ```json
 {
   "mcpServers": {
@@ -399,6 +466,46 @@ Interactive clients don't need this — they authenticate automatically (above).
   }
 }
 ```
+
+### Registering your own OAuth client
+
+Dynamic client registration is open by default (the catalogue is public read-only data and interactive MCP clients depend on self-registration). `grant_types` is honoured per RFC 7591 §3.2.1 and echoed back exactly as resolved.
+
+```bash
+curl -sS -X POST https://your-mcp-app.vercel.app/api/oauth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"client_name":"my-service","grant_types":["client_credentials"],"scope":"mcp:read"}'
+# → 201 with client_id, client_secret (once), client_secret_expires_at: 0, client_id_issued_at,
+#   grant_types, token_endpoint_auth_method, registration_access_token (once), registration_client_uri
+```
+
+- Supported grants: `authorization_code`, `refresh_token`, `client_credentials`.
+- Omitting `grant_types` defaults to `["authorization_code","refresh_token"]` when `redirect_uris` is supplied, and `["client_credentials"]` when it is not.
+- A client with `redirect_uris` is **public** (no secret, `token_endpoint_auth_method: "none"`, PKCE). A client without them is **confidential** (secret issued, `client_secret_post`).
+- Requesting `client_credentials` together with `redirect_uris` is rejected with `400 invalid_client_metadata` — a public client holds no secret, so honouring that grant would issue tokens to anyone who learns the `client_id`. Also rejected: an empty `grant_types` array, unsupported values, `refresh_token` without `authorization_code`, and `authorization_code`/`refresh_token` with no `redirect_uris`. Nothing is written to the database when a rule fires.
+- At the token endpoint, requesting a grant the client is not registered for returns `400 unauthorized_client`. Grants this server does not implement at all still return `400 unsupported_grant_type`.
+- Clients registered before `grant_types` was enforced keep working: a stored client that has a secret and no `redirect_uris` gets `client_credentials` added to its effective grant list on read. Public (secret-less) clients are deliberately **not** grandfathered.
+- Registration is rate-limited to 5 per 15 minutes per IP. Operators can require an initial access token with `OAUTH_REGISTRATION_ACCESS_TOKEN`, or disable registration entirely with `OAUTH_DISABLE_REGISTRATION=true`.
+
+#### Managing a registration (RFC 7592)
+
+The registration response carries a `registration_client_uri` and a one-time `registration_access_token`, so a client can inspect or delete itself without operator involvement:
+
+```bash
+# Read the current registration (never returns client_secret)
+curl -sS https://your-mcp-app.vercel.app/api/oauth/register/YOUR_CLIENT_ID \
+  -H "Authorization: Bearer $REGISTRATION_ACCESS_TOKEN"
+
+# Delete (revoke) it
+curl -sS -X DELETE https://your-mcp-app.vercel.app/api/oauth/register/YOUR_CLIENT_ID \
+  -H "Authorization: Bearer $REGISTRATION_ACCESS_TOKEN"
+# → 204 No Content
+```
+
+- `DELETE` is a revoke: the client can no longer authorize or obtain tokens, and the row is retained so the admin panel can still restore it. Already-issued access tokens stay valid until they expire (within the hour).
+- Every failure — missing/invalid header, wrong token, unknown `client_id`, already-deleted client — returns the same flat `401 {"error":"invalid_token"}`. There is deliberately no `404`, so the endpoint cannot be used to enumerate client IDs; a second `DELETE` therefore looks like an auth failure.
+- The `registration_access_token` is stored only as a SHA-256 hash. It cannot be read back or rotated — if it is lost, an operator must clean the client up from the admin panel. Clients registered before this endpoint existed have no management token and always receive `401` here.
+- Rate-limited to 30 requests per 15 minutes per IP.
 
 ### GitHub Copilot (VS Code)
 
@@ -457,11 +564,27 @@ bearer_token = "YOUR_SHORT_LIVED_ACCESS_TOKEN"
 const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-sonnet-4-5' });
 // → { resolved: 'anthropic/claude-sonnet-4-5', source: 'canonical', found: true, model: {...} }
 
-// List all available models (with optional provider filter and text search)
+// List models (default limit is 50; `total` tells you how many match, ignoring limit/offset)
 const models = await mcp.callTool('list_models', { limit: 50, provider: 'anthropic' });
+// → { models: [...], count: 50, total: 120 }
 
-// Search models by name, ID, or provider substring
-const results = await mcp.callTool('search_models', { query: 'claude', limit: 10 });
+// Exclude retired models, and trim the payload to just the fields you need
+const current = await mcp.callTool('list_models', {
+  limit: 500,
+  availableOnly: true,
+  fields: ['displayName', 'contextLength', 'inputPricePer1k', 'outputPricePer1k'], // id always included
+});
+
+// description and metadata are omitted by default — ask for them explicitly
+const withDescriptions = await mcp.callTool('list_models', { limit: 20, verbose: true });
+
+// Search models by name, ID, or provider substring; sortBy takes either casing
+const results = await mcp.callTool('search_models', {
+  query: 'claude',
+  limit: 10,
+  sortBy: 'createdAt', // same as 'created_at'
+  sortDir: 'desc',
+});
 
 // Get full details for a single model by canonical ID
 const model = await mcp.callTool('get_model', { id: 'anthropic/claude-sonnet-4-5' });
@@ -474,9 +597,10 @@ const affordable = await mcp.callTool('find_models_by_criteria', {
   limit: 20,
 });
 
-// Filter by modality — e.g. vision models that accept images
+// Filter by modality — match the INPUT side of the `inputs->outputs` string for vision models.
+// 'text->image' would be an image GENERATOR, not a vision model.
 const visionModels = await mcp.callTool('find_models_by_criteria', {
-  modality: 'text+image',
+  modality: 'image->',
   limit: 20,
 });
 
@@ -492,8 +616,10 @@ const comparison = await mcp.callTool('compare_models', {
   ids: ['anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'google/gemini-pro-1.5'],
 });
 
-// Get the current registry sync status
+// Get the current registry sync status plus live row counts
 const status = await mcp.callTool('get_registry_status', {});
+// → { status: { lastSuccessfulSync, lastAttemptedSync, lastError,
+//               recordCount, totalCount, availableCount, retiredCount } }
 
 // Read the full model list as a resource
 const resource = await mcp.readResource('registry://models');
@@ -576,12 +702,15 @@ CREATE TABLE sync_status (
 );
 ```
 
+`pnpm db:migrate` also creates and backfills the model lifecycle columns (`provider_expiration_at`, `last_seen_at`, `retired_at`, `is_available`), the `sync_history` and `admins` tables, and the `oauth_clients` table — including `revoked_at` and `registration_access_token_hash` (the SHA-256 hash of the RFC 7592 management token; `NULL` for clients registered before that endpoint existed). The script is a single idempotent run of `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it is safe to re-run.
+
 ---
 
 ## Security
 
 - **Admin endpoints** require `Authorization: Bearer <ADMIN_SECRET>` header
 - **MCP endpoint** requires OAuth bearer tokens in production when `OAUTH_JWT_SECRET` is configured; local dev/test may run anonymously when it is unset
+- **Grant types are enforced.** The token endpoint rejects a grant the client is not registered for with `400 unauthorized_client`, and registration refuses `client_credentials` for any client that has `redirect_uris` (such a client is public and holds no secret, so the grant would issue tokens to anyone who learns its `client_id`)
 - **Cron endpoint** is protected by `CRON_SECRET` (injected by Vercel automatically)
 - All user inputs validated with [Zod](https://zod.dev)
 - Model IDs treated as opaque strings — LLM reasoning never determines validity
@@ -619,7 +748,7 @@ Tests cover:
 | Variable | Required | Description |
 | --- | --- | --- |
 | `NEXT_PUBLIC_APP_URL` | ❌ | Public local/web URL, usually `http://localhost:3000`. Browser-visible, not a secret. |
-| `NEXT_PUBLIC_MCP_URL` | ❌ | Public MCP URL, usually `http://localhost:3001`. Browser-visible, not a secret. |
+| `NEXT_PUBLIC_MCP_URL` | ❌ | Public MCP URL, usually `http://localhost:3001`. Browser-visible, not a secret. Also enables the cross-host 308 redirects in `next.config.ts`; leave unset for single-host local dev. |
 | `MCP_URL` | ❌ | Server-side MCP URL override for route handlers. Defaults to `NEXT_PUBLIC_MCP_URL` when set. |
 | `MCP_CLIENT_ID` | ❌ locally | Server-side client id for protected MCP calls. May be omitted when local `apps/mcp` has no `OAUTH_JWT_SECRET`. |
 | `MCP_CLIENT_SECRET` | ❌ locally | Server-side client secret for protected MCP calls. May be omitted when local `apps/mcp` has no `OAUTH_JWT_SECRET`. |
@@ -631,7 +760,7 @@ Tests cover:
 | Variable | Required | Description |
 | --- | --- | --- |
 | `NEXT_PUBLIC_APP_URL` | ✅ | Public URL of the web deployment. Browser-visible, not a secret. |
-| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of the MCP deployment. Browser-visible, not a secret. |
+| `NEXT_PUBLIC_MCP_URL` | ✅ | Public URL of the MCP deployment. Browser-visible, not a secret. Also the target of this app's 308 redirects for `/api/mcp`, `/api/mcp/*`, `/api/oauth/*` and `/.well-known/*`. Baked in at build time — changing it needs a redeploy. |
 | `MCP_CLIENT_ID` | ✅ | Server-side OAuth client id used by web route handlers to request an MCP bearer token. |
 | `MCP_CLIENT_SECRET` | ✅ | Server-side OAuth client secret used only by web route handlers. Never expose to client components. |
 | `ADMIN_SESSION_SECRET` | ✅ if web admin UI is enabled | Signs web-owned admin session cookies. |
@@ -651,6 +780,9 @@ Tests cover:
 | `MCP_CLIENT_ID` | ✅ when OAuth is enabled | Static client id for server-to-server clients. |
 | `MCP_CLIENT_SECRET` | ✅ when OAuth is enabled | Static client secret for server-to-server clients. |
 | `NEXT_PUBLIC_MCP_URL` | ❌ | Public canonical MCP URL. Browser-visible, not a secret. |
+| `NEXT_PUBLIC_WEB_URL` | ❌ | Public URL of the docs host (`apps/web`); same value as its `NEXT_PUBLIC_APP_URL`. When set, `/mcp-info` 308-redirects there. Browser-visible, not a secret. |
+| `OAUTH_DISABLE_REGISTRATION` | ❌ | Set to `true` to refuse dynamic client registration. |
+| `OAUTH_REGISTRATION_ACCESS_TOKEN` | ❌ | When set, `POST /api/oauth/register` requires `Authorization: Bearer <this value>`. Unrelated to the per-client `registration_access_token` in a registration response. |
 | `CRON_SECRET` | ❌ locally | Optional cron bearer token. |
 
 ### `apps/mcp` Vercel preview/prod
@@ -665,7 +797,9 @@ Tests cover:
 | `ADMIN_SECRET` | ✅ | Server-side bearer token for MCP admin mutations. |
 | `CRON_SECRET` | ✅ if cron routes are deployed | Server-side cron bearer token. Vercel can inject this for cron jobs. |
 | `NEXT_PUBLIC_MCP_URL` | ❌ | Public canonical MCP URL for metadata/custom domains. Browser-visible, not a secret. |
+| `NEXT_PUBLIC_WEB_URL` | ❌ | Public URL of the docs host (`apps/web`); same value as its `NEXT_PUBLIC_APP_URL`. When set, this app 308-redirects `/mcp-info` there instead of 404ing. Baked in at build time. Browser-visible, not a secret. |
 | `OAUTH_DISABLE_REGISTRATION` | ❌ | Set to `true` to refuse OAuth dynamic client registration. Registration is enabled by default so interactive MCP clients can complete the authorization-code + PKCE flow. |
+| `OAUTH_REGISTRATION_ACCESS_TOKEN` | ❌ | Optional RFC 7591 §3.1 initial access token. When set, `POST /api/oauth/register` requires `Authorization: Bearer <this value>` and returns `401 invalid_token` otherwise; unset keeps registration open, which is what interactive MCP clients need to bootstrap. Distinct from the per-client `registration_access_token` returned by a registration response. |
 
 ### Local/CI script-only
 

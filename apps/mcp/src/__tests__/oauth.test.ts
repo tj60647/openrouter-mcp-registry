@@ -11,7 +11,12 @@ import {
   filterScopes,
   computePkceChallenge,
   verifyPkceS256,
+  constantTimeEquals,
+  resolveGrantTypes,
+  generateRegistrationAccessToken,
+  InvalidClientMetadataError,
   OAUTH_AUDIENCE,
+  SUPPORTED_GRANT_TYPES,
 } from '../lib/oauth';
 
 // ── getIssuerUrl ───────────────────────────────────────────────────────────────
@@ -209,5 +214,145 @@ describe('PKCE S256', () => {
     // Appendix B reference: verifier -> challenge
     const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
     expect(computePkceChallenge(verifier)).toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  });
+});
+
+// ── constantTimeEquals ─────────────────────────────────────────────────────────
+
+describe('constantTimeEquals', () => {
+  it('returns true for identical strings', () => {
+    expect(constantTimeEquals('a-shared-token', 'a-shared-token')).toBe(true);
+  });
+
+  it('returns false for different strings', () => {
+    expect(constantTimeEquals('a-shared-token', 'a-shared-tokeN')).toBe(false);
+  });
+
+  it('returns false (does not throw) for strings of different lengths', () => {
+    expect(constantTimeEquals('short', 'a-much-longer-token')).toBe(false);
+  });
+});
+
+// ── generateRegistrationAccessToken ────────────────────────────────────────────
+
+describe('generateRegistrationAccessToken', () => {
+  it('produces distinct high-entropy tokens', () => {
+    const a = generateRegistrationAccessToken();
+    const b = generateRegistrationAccessToken();
+    expect(a).not.toBe(b);
+    expect(a.length).toBeGreaterThanOrEqual(32);
+  });
+});
+
+// ── resolveGrantTypes (RFC 7591 §3.2.1) ────────────────────────────────────────
+
+describe('resolveGrantTypes defaults (grant_types omitted)', () => {
+  it('defaults to authorization_code + refresh_token when redirect_uris are present', () => {
+    const resolved = resolveGrantTypes(undefined, ['https://app.example.com/cb']);
+    expect(resolved.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(resolved.isPublic).toBe(true);
+  });
+
+  it('defaults to client_credentials when there are no redirect_uris', () => {
+    const resolved = resolveGrantTypes(undefined, []);
+    expect(resolved.grantTypes).toEqual(['client_credentials']);
+    expect(resolved.isPublic).toBe(false);
+  });
+});
+
+describe('resolveGrantTypes explicit requests', () => {
+  it('honours an explicit authorization_code + refresh_token request', () => {
+    const resolved = resolveGrantTypes(
+      ['authorization_code', 'refresh_token'],
+      ['https://app.example.com/cb'],
+    );
+    expect(resolved.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(resolved.isPublic).toBe(true);
+  });
+
+  it('honours authorization_code alone (no refresh_token)', () => {
+    const resolved = resolveGrantTypes(['authorization_code'], ['https://app.example.com/cb']);
+    expect(resolved.grantTypes).toEqual(['authorization_code']);
+    expect(resolved.isPublic).toBe(true);
+  });
+
+  it('honours an explicit client_credentials request as a confidential client', () => {
+    const resolved = resolveGrantTypes(['client_credentials'], []);
+    expect(resolved.grantTypes).toEqual(['client_credentials']);
+    expect(resolved.isPublic).toBe(false);
+  });
+
+  it('de-duplicates repeated grant types', () => {
+    const resolved = resolveGrantTypes(
+      ['authorization_code', 'authorization_code', 'refresh_token'],
+      ['https://app.example.com/cb'],
+    );
+    expect(resolved.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+  });
+
+  it('only supports the advertised grant types', () => {
+    expect([...SUPPORTED_GRANT_TYPES]).toEqual([
+      'authorization_code',
+      'refresh_token',
+      'client_credentials',
+    ]);
+  });
+});
+
+describe('resolveGrantTypes rejections', () => {
+  it('rejects an unsupported grant type', () => {
+    expect(() => resolveGrantTypes(['password'], ['https://app.example.com/cb'])).toThrow(
+      InvalidClientMetadataError,
+    );
+    expect(() => resolveGrantTypes(['password'], ['https://app.example.com/cb'])).toThrow(
+      /unsupported grant_type: password/,
+    );
+  });
+
+  it('rejects an empty grant_types array', () => {
+    expect(() => resolveGrantTypes([], ['https://app.example.com/cb'])).toThrow(
+      /grant_types must not be empty/,
+    );
+  });
+
+  it('rejects authorization_code with no redirect_uris', () => {
+    expect(() => resolveGrantTypes(['authorization_code'], [])).toThrow(
+      /authorization_code requires at least one redirect_uri/,
+    );
+  });
+
+  it('rejects authorization_code + refresh_token with no redirect_uris', () => {
+    expect(() => resolveGrantTypes(['authorization_code', 'refresh_token'], [])).toThrow(
+      /authorization_code requires at least one redirect_uri/,
+    );
+  });
+
+  it('rejects refresh_token without authorization_code', () => {
+    expect(() => resolveGrantTypes(['refresh_token'], ['https://app.example.com/cb'])).toThrow(
+      /refresh_token requires authorization_code/,
+    );
+  });
+
+  it('rejects client_credentials requested together with redirect_uris', () => {
+    expect(() => resolveGrantTypes(['client_credentials'], ['https://app.example.com/cb'])).toThrow(
+      /client_credentials is not available to public clients registered with redirect_uris/,
+    );
+  });
+
+  it('rejects mixing client_credentials into an interactive registration', () => {
+    // The bypass being closed: a public PKCE client asking for a secret-less
+    // client_credentials grant.
+    expect(() =>
+      resolveGrantTypes(
+        ['authorization_code', 'refresh_token', 'client_credentials'],
+        ['https://app.example.com/cb'],
+      ),
+    ).toThrow(/client_credentials is not available to public clients/);
+  });
+
+  it('rejects authorization_code + client_credentials with no redirect_uris', () => {
+    expect(() => resolveGrantTypes(['authorization_code', 'client_credentials'], [])).toThrow(
+      /authorization_code requires at least one redirect_uri/,
+    );
   });
 });

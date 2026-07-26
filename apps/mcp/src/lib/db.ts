@@ -4,8 +4,9 @@ import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-
 import type { ModelRepository } from '@openrouter-mcp/shared';
 
 // Whitelist of allowed sort columns mapped to their SQL column names.
-// Supports both PaginationSchema aliases (newest, context, input_price, output_price)
-// and raw column names. Used to prevent SQL injection.
+// Supports PaginationSchema aliases (newest, context, input_price, output_price),
+// raw snake_case column names, and the camelCase spellings used by the Model
+// record shape. Used to prevent SQL injection.
 const SORT_COLUMN_MAP: Record<string, string> = {
   id: 'id',
   newest: 'created_at',
@@ -21,15 +22,39 @@ const SORT_COLUMN_MAP: Record<string, string> = {
   output_price_per_1k: 'output_price_per_1k',
   image_price_per_1k: 'image_price_per_1k',
   created_at: 'created_at',
+  // camelCase spellings matching the Model record fields — callers should not
+  // have to remember which casing a given API expects.
+  displayName: 'display_name',
+  contextLength: 'context_length',
+  maxCompletionTokens: 'max_completion_tokens',
+  inputPricePer1k: 'input_price_per_1k',
+  outputPricePer1k: 'output_price_per_1k',
+  imagePricePer1k: 'image_price_per_1k',
+  createdAt: 'created_at',
 };
 
-// Columns that may contain NULLs and need NULLS LAST appended.
-const NULLABLE_SORT_COLUMNS = new Set(['newest', 'context', 'input_price', 'output_price', 'created_at', 'context_length', 'input_price_per_1k', 'output_price_per_1k']);
+// Columns that may contain NULLs and need NULLS LAST appended. Every nullable
+// column in the models table is listed under every spelling that maps to it —
+// Postgres defaults to NULLS FIRST for DESC, so omitting one puts the rows with
+// no value at the top of a "largest/most expensive first" page.
+const NULLABLE_SORT_COLUMNS = new Set([
+  'newest', 'context', 'input_price', 'output_price',
+  'created_at', 'context_length', 'max_completion_tokens',
+  'input_price_per_1k', 'output_price_per_1k', 'image_price_per_1k',
+  // camelCase spellings of the same columns
+  'createdAt', 'contextLength', 'maxCompletionTokens',
+  'inputPricePer1k', 'outputPricePer1k', 'imagePricePer1k',
+]);
 
 export type SortBy = keyof typeof SORT_COLUMN_MAP;
 
 function resolveOrderBy(sortBy?: string): string {
-  return SORT_COLUMN_MAP[sortBy ?? ''] ?? 'id';
+  const key = sortBy ?? '';
+  // Own-property lookup only: a bare index would resolve inherited members such
+  // as 'constructor' or 'toString' to a non-nullish value, letting a spelling
+  // that is not in the whitelist reach the interpolated ORDER BY clause.
+  if (!Object.prototype.hasOwnProperty.call(SORT_COLUMN_MAP, key)) return 'id';
+  return SORT_COLUMN_MAP[key] ?? 'id';
 }
 
 function resolveOrderDirection(sortDir?: string): 'ASC' | 'DESC' {
@@ -40,24 +65,24 @@ function resolveNullsClause(sortBy?: string): string {
   return NULLABLE_SORT_COLUMNS.has(sortBy ?? '') ? ' NULLS LAST' : '';
 }
 
-export async function getModels(opts: {
-  limit: number;
-  offset: number;
+/** Filters understood by both `getModels` and `getModelsCount`. */
+export interface ModelFilter {
   provider?: string;
   query?: string;
-  sortBy?: string;
-  sortDir?: string;
   toolsOnly?: boolean;
   reasoningOnly?: boolean;
   availableOnly?: boolean;
   retiredOnly?: boolean;
-}): Promise<Model[]> {
-  const { limit, offset, provider, query, sortBy, sortDir, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
-  const likeQuery = query ? `%${query}%` : null;
-  const orderCol = resolveOrderBy(sortBy);
-  const orderDir = resolveOrderDirection(sortDir);
-  const nullsClause = resolveNullsClause(sortBy);
+}
 
+/**
+ * Builds the WHERE clause and its positional parameters for the `models` table.
+ * Shared by the page query and the matching-row count query so the two can
+ * never disagree about what "matching" means. Callers append their own
+ * parameters (LIMIT/OFFSET) after the ones returned here.
+ */
+function buildModelWhere(opts: ModelFilter): { where: string; params: (string | number | null)[] } {
+  const { provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
   const conditions: string[] = [];
   const params: (string | number | null)[] = [];
 
@@ -65,7 +90,8 @@ export async function getModels(opts: {
     params.push(provider);
     conditions.push(`provider = $${params.length}`);
   }
-  if (likeQuery) {
+  if (query) {
+    const likeQuery = `%${query}%`;
     params.push(likeQuery, likeQuery, likeQuery);
     const n = params.length;
     conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
@@ -83,7 +109,23 @@ export async function getModels(opts: {
     conditions.push(`is_available = FALSE`);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  return { where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '', params };
+}
+
+export async function getModels(
+  opts: ModelFilter & {
+    limit: number;
+    offset: number;
+    sortBy?: string;
+    sortDir?: string;
+  }
+): Promise<Model[]> {
+  const { limit, offset, sortBy, sortDir } = opts;
+  const orderCol = resolveOrderBy(sortBy);
+  const orderDir = resolveOrderDirection(sortDir);
+  const nullsClause = resolveNullsClause(sortBy);
+
+  const { where, params } = buildModelWhere(opts);
   params.push(limit, offset);
   const queryStr = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
@@ -91,47 +133,33 @@ export async function getModels(opts: {
   return result.rows.map(rowToModel);
 }
 
-export async function getModelsCount(opts: {
-  provider?: string;
-  query?: string;
-  toolsOnly?: boolean;
-  reasoningOnly?: boolean;
-  availableOnly?: boolean;
-  retiredOnly?: boolean;
-}): Promise<number> {
-  const { provider, query, toolsOnly, reasoningOnly, availableOnly, retiredOnly } = opts;
-  const likeQuery = query ? `%${query}%` : null;
-
-  const conditions: string[] = [];
-  const params: (string | number | null)[] = [];
-
-  if (provider) {
-    params.push(provider);
-    conditions.push(`provider = $${params.length}`);
-  }
-  if (likeQuery) {
-    params.push(likeQuery, likeQuery, likeQuery);
-    const n = params.length;
-    conditions.push(`(id ILIKE $${n - 2} OR display_name ILIKE $${n - 1} OR provider ILIKE $${n})`);
-  }
-  if (availableOnly) {
-    conditions.push(`is_available = TRUE`);
-  }
-  if (toolsOnly) {
-    conditions.push(`'tools' = ANY(supported_parameters)`);
-  }
-  if (reasoningOnly) {
-    conditions.push(`'reasoning' = ANY(supported_parameters)`);
-  }
-  if (retiredOnly) {
-    conditions.push(`is_available = FALSE`);
-  }
-
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+/** Number of rows matching the same filters as `getModels`, ignoring limit/offset. */
+export async function getModelsCount(opts: ModelFilter): Promise<number> {
+  const { where, params } = buildModelWhere(opts);
   const queryStr = `SELECT COUNT(*)::text AS count FROM models ${where}`;
 
   const result = await db.query<{ count: string }>(queryStr, params);
   return Number(result.rows[0]?.count ?? 0);
+}
+
+/**
+ * Live row counts straight from the `models` table. Lets callers reconcile
+ * list results against `sync_status.record_count`, which only counts the models
+ * present in the last successful sync and therefore excludes retired rows.
+ */
+export async function getModelCounts(): Promise<{ total: number; available: number; retired: number }> {
+  const result = await db.query<{ total: string; available: string; retired: string }>(
+    `SELECT COUNT(*)::text AS total,
+            COUNT(*) FILTER (WHERE is_available)::text AS available,
+            COUNT(*) FILTER (WHERE NOT is_available)::text AS retired
+     FROM models`
+  );
+  const row = result.rows[0];
+  return {
+    total: Number(row?.total ?? 0),
+    available: Number(row?.available ?? 0),
+    retired: Number(row?.retired ?? 0),
+  };
 }
 
 export async function getModelById(id: string): Promise<Model | null> {
@@ -169,23 +197,23 @@ export async function getSyncHistory(limit = 50): Promise<SyncHistoryEntry[]> {
   return result.rows.map(rowToSyncHistoryEntry);
 }
 
-export async function findModelsByCriteria(opts: {
+/** Filters understood by both `findModelsByCriteria` and `findModelsByCriteriaCount`. */
+export interface ModelCriteria {
   maxInputPricePer1k?: number;
   maxOutputPricePer1k?: number;
   minContextLength?: number;
   modality?: string;
-  limit: number;
-  offset: number;
-  sortBy?: string;
-  sortDir?: string;
-}): Promise<Model[]> {
-  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality, limit, offset, sortBy, sortDir } = opts;
-  const orderCol = resolveOrderBy(sortBy);
-  const orderDir = resolveOrderDirection(sortDir);
-  const nullsClause = resolveNullsClause(sortBy);
+}
 
+/**
+ * Builds the WHERE clause and its positional parameters for the criteria
+ * search. Shared by the page query and its matching-row count query. NULL
+ * prices pass the price filters — they are treated as free/unknown.
+ */
+function buildCriteriaWhere(opts: ModelCriteria): { where: string; params: (string | number | null)[] } {
+  const { maxInputPricePer1k, maxOutputPricePer1k, minContextLength, modality } = opts;
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: (string | number | null)[] = [];
 
   if (maxInputPricePer1k != null) {
     params.push(maxInputPricePer1k);
@@ -204,12 +232,37 @@ export async function findModelsByCriteria(opts: {
     conditions.push(`modality ILIKE $${params.length}`);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  return { where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '', params };
+}
+
+export async function findModelsByCriteria(
+  opts: ModelCriteria & {
+    limit: number;
+    offset: number;
+    sortBy?: string;
+    sortDir?: string;
+  }
+): Promise<Model[]> {
+  const { limit, offset, sortBy, sortDir } = opts;
+  const orderCol = resolveOrderBy(sortBy);
+  const orderDir = resolveOrderDirection(sortDir);
+  const nullsClause = resolveNullsClause(sortBy);
+
+  const { where, params } = buildCriteriaWhere(opts);
   params.push(limit, offset);
   const query = `SELECT * FROM models ${where} ORDER BY ${orderCol} ${orderDir}${nullsClause} LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
-  const result = await db.query<ModelRow>(query, params as (string | number | null)[]);
+  const result = await db.query<ModelRow>(query, params);
   return result.rows.map(rowToModel);
+}
+
+/** Number of rows matching the same criteria as `findModelsByCriteria`, ignoring limit/offset. */
+export async function findModelsByCriteriaCount(opts: ModelCriteria): Promise<number> {
+  const { where, params } = buildCriteriaWhere(opts);
+  const query = `SELECT COUNT(*)::text AS count FROM models ${where}`;
+
+  const result = await db.query<{ count: string }>(query, params);
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 export async function semanticSearchModels(opts: {

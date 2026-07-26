@@ -51,13 +51,23 @@ const mockGetSyncStatus = vi.fn<[], Promise<SyncStatus | null>>();
 const mockGetSyncHistory = vi.fn<[number?], Promise<SyncHistoryEntry[]>>();
 const mockFindModelsByCriteria = vi.fn<[], Promise<Model[]>>();
 const mockSemanticSearchModels = vi.fn<[], Promise<Model[]>>();
+// Count helpers resolve to a harmless default so tests that only care about
+// the model payload do not have to stub them.
+const mockGetModelsCount = vi.fn<[], Promise<number>>().mockResolvedValue(0);
+const mockFindModelsByCriteriaCount = vi.fn<[], Promise<number>>().mockResolvedValue(0);
+const mockGetModelCounts = vi
+  .fn<[], Promise<{ total: number; available: number; retired: number }>>()
+  .mockResolvedValue({ total: 0, available: 0, retired: 0 });
 
 vi.mock('../lib/db', () => ({
   getModels: (...args: unknown[]) => mockGetModels(...(args as [])),
+  getModelsCount: (...args: unknown[]) => mockGetModelsCount(...(args as [])),
+  getModelCounts: (...args: unknown[]) => mockGetModelCounts(...(args as [])),
   getModelById: (...args: unknown[]) => mockGetModelById(...(args as [string])),
   getSyncStatus: (...args: unknown[]) => mockGetSyncStatus(...(args as [])),
   getSyncHistory: (...args: unknown[]) => mockGetSyncHistory(...(args as [number?])),
   findModelsByCriteria: (...args: unknown[]) => mockFindModelsByCriteria(...(args as [])),
+  findModelsByCriteriaCount: (...args: unknown[]) => mockFindModelsByCriteriaCount(...(args as [])),
   semanticSearchModels: (...args: unknown[]) => mockSemanticSearchModels(...(args as [])),
 }));
 
@@ -160,6 +170,28 @@ describe('list_models tool', () => {
     expect(body.models).toHaveLength(2);
   });
 
+  it('returns total (matching rows) alongside count (page size)', async () => {
+    mockGetModels.mockResolvedValueOnce([makeModel({ id: 'a/b' })]);
+    mockGetModelsCount.mockResolvedValueOnce(137);
+
+    const result = await toolHandlers['list_models']!({ limit: 1, offset: 0 });
+
+    const body = parseResult(result) as { count: number; total: number };
+    expect(body.count).toBe(1);
+    expect(body.total).toBe(137);
+  });
+
+  it('passes the availability filter to the count query too', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+    mockGetModelsCount.mockResolvedValueOnce(0);
+
+    await toolHandlers['list_models']!({ limit: 10, offset: 0, provider: 'anthropic', availableOnly: true });
+
+    expect(mockGetModelsCount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ provider: 'anthropic', availableOnly: true })
+    );
+  });
+
   it('returns isError: true when the db throws', async () => {
     mockGetModels.mockRejectedValueOnce(new Error('db down'));
     const result = await toolHandlers['list_models']!({ limit: 10, offset: 0 });
@@ -242,6 +274,18 @@ describe('search_models tool', () => {
     expect(body.count).toBe(1);
   });
 
+  it('returns total (matching rows) alongside count (page size)', async () => {
+    mockGetModels.mockResolvedValueOnce([makeModel()]);
+    mockGetModelsCount.mockResolvedValueOnce(9);
+
+    const result = await toolHandlers['search_models']!({ query: 'claude', limit: 20, offset: 0 });
+
+    const body = parseResult(result) as { count: number; total: number };
+    expect(body.count).toBe(1);
+    expect(body.total).toBe(9);
+    expect(mockGetModelsCount).toHaveBeenLastCalledWith({ query: 'claude' });
+  });
+
   it('returns isError: true on db error', async () => {
     mockGetModels.mockRejectedValueOnce(new Error('query failed'));
     const result = await toolHandlers['search_models']!({ query: 'test', limit: 10, offset: 0 });
@@ -272,6 +316,25 @@ describe('find_models_by_criteria tool', () => {
     const result = await toolHandlers['find_models_by_criteria']!({ limit: 50, offset: 0 });
     const body = parseResult(result) as { count: number };
     expect(body.count).toBe(0);
+  });
+
+  it('returns total from the criteria count query, built from the same criteria', async () => {
+    mockFindModelsByCriteria.mockResolvedValueOnce([makeModel()]);
+    mockFindModelsByCriteriaCount.mockResolvedValueOnce(23);
+
+    const result = await toolHandlers['find_models_by_criteria']!({
+      maxInputPricePer1k: 0.01,
+      modality: 'image->',
+      limit: 50,
+      offset: 0,
+    });
+
+    const body = parseResult(result) as { count: number; total: number };
+    expect(body.count).toBe(1);
+    expect(body.total).toBe(23);
+    expect(mockFindModelsByCriteriaCount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ maxInputPricePer1k: 0.01, modality: 'image->' })
+    );
   });
 
   it('returns isError: true on db error', async () => {
@@ -369,6 +432,22 @@ describe('get_registry_status tool', () => {
     expect(body.status.recordCount).toBe(150);
   });
 
+  it('merges live model counts into the status so recordCount can be reconciled', async () => {
+    mockGetSyncStatus.mockResolvedValueOnce(makeSyncStatus({ recordCount: 150 }));
+    mockGetModelCounts.mockResolvedValueOnce({ total: 180, available: 150, retired: 30 });
+
+    const result = await toolHandlers['get_registry_status']!({});
+
+    const body = parseResult(result) as {
+      status: { recordCount: number; totalCount: number; availableCount: number; retiredCount: number };
+    };
+    expect(body.status.recordCount).toBe(150);
+    expect(body.status.totalCount).toBe(180);
+    expect(body.status.availableCount).toBe(150);
+    expect(body.status.retiredCount).toBe(30);
+    expect(body.status.availableCount + body.status.retiredCount).toBe(body.status.totalCount);
+  });
+
   it('returns status: null when no sync has occurred', async () => {
     mockGetSyncStatus.mockResolvedValueOnce(null);
     const result = await toolHandlers['get_registry_status']!({});
@@ -412,5 +491,163 @@ describe('get_sync_history tool', () => {
     const result = await toolHandlers['get_sync_history']!({ limit: 50 });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('history table unavailable');
+  });
+});
+
+describe('model projection (verbose / fields)', () => {
+  const verboseModel = makeModel({
+    id: 'p/model',
+    description: 'A very long model description',
+    metadata: { architecture: { tokenizer: 'test' } },
+  });
+
+  /** Read the first projected record out of a list-style tool response. */
+  function firstRecord(result: ToolResult): Record<string, unknown> {
+    const body = parseResult(result) as { models: Record<string, unknown>[] };
+    return body.models[0] as Record<string, unknown>;
+  }
+
+  it('omits description and metadata by default (verbose is false)', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({ limit: 10, offset: 0, verbose: false });
+
+    const record = firstRecord(result);
+    expect(record).not.toHaveProperty('description');
+    expect(record).not.toHaveProperty('metadata');
+    // Everything else survives.
+    expect(record['id']).toBe('p/model');
+    expect(record['displayName']).toBe('Test Model');
+    expect(record['inputPricePer1k']).toBe(0.001);
+    expect(record['isAvailable']).toBe(true);
+  });
+
+  it('includes description and metadata when verbose is true', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({ limit: 10, offset: 0, verbose: true });
+
+    const record = firstRecord(result);
+    expect(record['description']).toBe('A very long model description');
+    expect(record['metadata']).toEqual({ architecture: { tokenizer: 'test' } });
+  });
+
+  it('returns only the requested fields, always including id', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({
+      limit: 10,
+      offset: 0,
+      verbose: false,
+      fields: ['displayName', 'inputPricePer1k'],
+    });
+
+    expect(Object.keys(firstRecord(result))).toEqual(['id', 'displayName', 'inputPricePer1k']);
+  });
+
+  it('ignores unknown field names instead of erroring', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({
+      limit: 10,
+      offset: 0,
+      fields: ['displayName', 'notAFieldAtAll'],
+    });
+
+    const record = firstRecord(result);
+    expect(Object.keys(record)).toEqual(['id', 'displayName']);
+    expect(record).not.toHaveProperty('notAFieldAtAll');
+  });
+
+  it('does not duplicate id when it is requested explicitly', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({ limit: 10, offset: 0, fields: ['id'] });
+
+    expect(Object.keys(firstRecord(result))).toEqual(['id']);
+  });
+
+  it('lets fields win over verbose', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['list_models']!({
+      limit: 10,
+      offset: 0,
+      verbose: true,
+      fields: ['description'],
+    });
+
+    const record = firstRecord(result);
+    expect(Object.keys(record)).toEqual(['id', 'description']);
+    expect(record['description']).toBe('A very long model description');
+  });
+
+  it('applies to search_models', async () => {
+    mockGetModels.mockResolvedValueOnce([verboseModel]);
+    const result = await toolHandlers['search_models']!({ query: 'p', limit: 20, offset: 0, verbose: false });
+    expect(firstRecord(result)).not.toHaveProperty('description');
+  });
+
+  it('applies to find_models_by_criteria', async () => {
+    mockFindModelsByCriteria.mockResolvedValueOnce([verboseModel]);
+    const result = await toolHandlers['find_models_by_criteria']!({ limit: 50, offset: 0, verbose: false });
+    expect(firstRecord(result)).not.toHaveProperty('metadata');
+  });
+
+  it('applies to semantic_search', async () => {
+    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    mockGenerateEmbedding.mockResolvedValueOnce([0.1, 0.2, 0.3]);
+    mockSemanticSearchModels.mockResolvedValueOnce([verboseModel]);
+
+    const result = await toolHandlers['semantic_search']!({ query: 'anything', limit: 5, offset: 0, verbose: false });
+
+    delete process.env['OPENROUTER_API_KEY'];
+    expect(firstRecord(result)).not.toHaveProperty('description');
+  });
+
+  it('keeps full records in get_model (never projected)', async () => {
+    mockGetModelById.mockResolvedValueOnce(verboseModel);
+    const result = await toolHandlers['get_model']!({ id: 'p/model' });
+    const body = parseResult(result) as { model: Record<string, unknown> };
+    expect(body.model['description']).toBe('A very long model description');
+    expect(body.model['metadata']).toEqual({ architecture: { tokenizer: 'test' } });
+  });
+});
+
+describe('camelCase sortBy (P6)', () => {
+  it('passes a camelCase sortBy straight through to list_models db query', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['list_models']!({ limit: 10, offset: 0, sortBy: 'createdAt', sortDir: 'desc' });
+
+    expect(mockGetModels).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sortBy: 'createdAt', sortDir: 'desc' })
+    );
+  });
+
+  it('passes a camelCase sortBy straight through to search_models', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['search_models']!({ query: 'x', limit: 20, offset: 0, sortBy: 'inputPricePer1k' });
+
+    expect(mockGetModels).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'inputPricePer1k' }));
+  });
+
+  it('passes a camelCase sortBy straight through to find_models_by_criteria', async () => {
+    mockFindModelsByCriteria.mockResolvedValueOnce([]);
+
+    await toolHandlers['find_models_by_criteria']!({ limit: 50, offset: 0, sortBy: 'contextLength' });
+
+    expect(mockFindModelsByCriteria).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sortBy: 'contextLength' })
+    );
+  });
+
+  it('still accepts the snake_case spelling', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['list_models']!({ limit: 10, offset: 0, sortBy: 'created_at' });
+
+    expect(mockGetModels).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'created_at' }));
   });
 });

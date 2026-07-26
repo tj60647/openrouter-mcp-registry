@@ -19,6 +19,17 @@ export const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 /** Scopes that may be granted to any client (registered or static). */
 export const ALLOWED_SCOPES = new Set(['mcp:read']);
 
+/**
+ * Grants this authorization server implements. Advertised as
+ * `grant_types_supported` and used to validate RFC 7591 registrations, so the
+ * metadata document and the enforcement path can never drift apart.
+ */
+export const SUPPORTED_GRANT_TYPES: readonly string[] = [
+  'authorization_code',
+  'refresh_token',
+  'client_credentials',
+];
+
 /** Filter a requested scope string down to allowed scopes; default to mcp:read. */
 export function filterScopes(requestedScope: string | undefined): string {
   const filtered = (requestedScope ?? '')
@@ -138,6 +149,17 @@ export function verifyClientSecret(provided: string, storedHash: string): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * Constant-time comparison of two opaque bearer tokens. Both sides are hashed
+ * to a fixed-length digest first, so the comparison cannot leak the expected
+ * token's length through an early-exit or a thrown length mismatch.
+ */
+export function constantTimeEquals(a: string, b: string): boolean {
+  const ah = createHash('sha256').update(a).digest();
+  const bh = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ah, bh);
+}
+
 // ── Credential generation ───────────────────────────────────────────────────────
 
 export function generateClientId(): string {
@@ -150,6 +172,15 @@ export function generateClientSecret(): string {
 
 /** Generate an opaque authorization code (returned to the client, stored hashed). */
 export function generateAuthorizationCode(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/**
+ * Generate the RFC 7592 registration access token handed to a client exactly
+ * once at registration time. Stored hashed; used to read or delete its own
+ * registration.
+ */
+export function generateRegistrationAccessToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
@@ -170,6 +201,88 @@ export interface OAuthClient {
   tokenEndpointAuthMethod: string;
   /** Space-separated list of granted scopes. */
   scope: string;
+}
+
+// ── Registration metadata validation (RFC 7591 §2, §3.2.1) ─────────────────────
+
+/**
+ * Raised when a registration request carries metadata this server refuses.
+ * The registration endpoint maps it to `400 invalid_client_metadata`.
+ */
+export class InvalidClientMetadataError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidClientMetadataError';
+  }
+}
+
+export interface ResolvedGrantTypes {
+  /** The exact list to persist and echo back in the registration response. */
+  grantTypes: string[];
+  /** Public clients get no secret and token_endpoint_auth_method 'none'. */
+  isPublic: boolean;
+}
+
+/**
+ * Resolve the grant types a registration request should end up with (RFC 7591
+ * §3.2.1) and decide whether the client is public or confidential.
+ *
+ * When `requested` is undefined the defaults preserve the historical behaviour:
+ * redirect_uris ⇒ interactive authorization-code client, no redirect_uris ⇒
+ * confidential client_credentials service client.
+ *
+ * `client_credentials` is deliberately incompatible with `redirect_uris`: a
+ * client registered with redirect_uris is public and holds no secret, so
+ * honouring client_credentials for it would let anyone who learns the
+ * client_id mint access tokens.
+ *
+ * Throws InvalidClientMetadataError for any combination this server refuses.
+ */
+export function resolveGrantTypes(
+  requested: string[] | undefined,
+  redirectUris: string[],
+): ResolvedGrantTypes {
+  const hasRedirectUris = redirectUris.length > 0;
+
+  if (requested === undefined) {
+    return hasRedirectUris
+      ? { grantTypes: ['authorization_code', 'refresh_token'], isPublic: true }
+      : { grantTypes: ['client_credentials'], isPublic: false };
+  }
+
+  if (requested.length === 0) {
+    throw new InvalidClientMetadataError('grant_types must not be empty');
+  }
+
+  const grantTypes = [...new Set(requested)];
+
+  const unsupported = grantTypes.find((g) => !SUPPORTED_GRANT_TYPES.includes(g));
+  if (unsupported) {
+    throw new InvalidClientMetadataError(
+      `unsupported grant_type: ${unsupported}. Supported: ${SUPPORTED_GRANT_TYPES.join(', ')}`,
+    );
+  }
+
+  const wantsAuthCode = grantTypes.includes('authorization_code');
+  const wantsRefresh = grantTypes.includes('refresh_token');
+  const wantsClientCredentials = grantTypes.includes('client_credentials');
+
+  if (wantsRefresh && !wantsAuthCode) {
+    throw new InvalidClientMetadataError(
+      'refresh_token requires authorization_code to also be requested',
+    );
+  }
+  if ((wantsAuthCode || wantsRefresh) && !hasRedirectUris) {
+    throw new InvalidClientMetadataError('authorization_code requires at least one redirect_uri');
+  }
+  if (wantsClientCredentials && hasRedirectUris) {
+    throw new InvalidClientMetadataError(
+      'client_credentials is not available to public clients registered with redirect_uris',
+    );
+  }
+
+  // Public vs confidential follows the resolved grants, not redirect_uris alone.
+  return { grantTypes, isPublic: !wantsClientCredentials };
 }
 
 /**
