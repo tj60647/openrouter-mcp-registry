@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @openrouter-mcp/web --filter @openrouter-mcp/mcp dev",
-    "build": "pnpm --filter @openrouter-mcp/shared build && pnpm --filter @openrouter-mcp/web build && pnpm --filter @openrouter-mcp/mcp build",
+    "build": "pnpm --filter @openrouter-mcp/web build && pnpm --filter @openrouter-mcp/mcp build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

@@ -246,7 +246,7 @@ pnpm dev
 | Script            | Description                 |
 | ----------------- | --------------------------- |
 | `pnpm dev`        | Start all apps in parallel  |
-| `pnpm build`      | Build all packages and apps |
+| `pnpm build`      | Build both Next.js apps. `packages/shared` has no build step: it is consumed as TypeScript source through `transpilePackages`, and its `exports` point at `./src/index.ts` |
 | `pnpm test`       | Run all tests               |
 | `pnpm typecheck`  | TypeScript type check       |
 | `pnpm lint`       | Lint all packages           |
