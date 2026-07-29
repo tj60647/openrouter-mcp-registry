@@ -112,6 +112,40 @@ describe('checkRateLimit', () => {
     await expect(checkRateLimit('k', OPTS)).resolves.toBe(false);
   });
 
+  it('fails open, loudly, when the table has not been migrated yet', async () => {
+    // Migrations are a manual step, so deploying this code before running them
+    // is a realistic mistake. Failing closed on it would take every OAuth
+    // endpoint and every MCP tool call down at once.
+    const err = Object.assign(new Error('relation "rate_limits" does not exist'), { code: '42P01' });
+    mockQuery.mockRejectedValueOnce(err);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(checkRateLimit('k', OPTS)).resolves.toBe(true);
+    expect(logged).toHaveBeenCalled();
+    expect(String(logged.mock.calls[0]?.[0])).toContain('rate_limits');
+
+    logged.mockRestore();
+  });
+
+  it('recognises the missing table from the message when no code is attached', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('relation "rate_limits" does not exist'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(checkRateLimit('k', OPTS)).resolves.toBe(true);
+
+    logged.mockRestore();
+  });
+
+  it('does not treat an unrelated missing relation as its own provisioning gap', async () => {
+    // A bare undefined-table message naming a different relation is not the
+    // carve-out. (An SQLSTATE 42P01 raised by this function can only ever be
+    // about rate_limits, since that is the only table it queries — so the code
+    // check alone is sound; this pins the message-only path.)
+    mockQuery.mockRejectedValueOnce(new Error('relation "models" does not exist'));
+
+    await expect(checkRateLimit('k', OPTS)).resolves.toBe(false);
+  });
+
   it('fails closed when the store returns nothing usable', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await expect(checkRateLimit('k', OPTS)).resolves.toBe(false);

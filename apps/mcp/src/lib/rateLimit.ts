@@ -19,6 +19,7 @@
  */
 
 import { db } from '@vercel/postgres';
+import { logger } from '@openrouter-mcp/shared';
 
 export interface RateLimitOptions {
   /** Maximum number of requests allowed within `windowMs`. */
@@ -72,9 +73,31 @@ export async function checkRateLimit(
 
     void maybePrune();
     return count <= limit;
-  } catch {
+  } catch (err) {
+    // Narrow carve-out to the one error that is a provisioning gap rather than
+    // a failure: the table does not exist because `pnpm db:migrate` has not been
+    // run against this database yet. Migrations here are a manual step, so
+    // deploying this code first is a realistic mistake — and failing closed on
+    // it would take every OAuth endpoint and every MCP tool call down at once,
+    // which is far worse than a read-only public registry running briefly
+    // without limits. Logged at error level so it cannot pass unnoticed.
+    if (isUndefinedTable(err)) {
+      logger.error('rate_limits table is missing — rate limiting is DISABLED until migrations run', {
+        key,
+        remedy: 'pnpm db:migrate',
+      });
+      return true;
+    }
     return false;
   }
+}
+
+/** Postgres `undefined_table` (SQLSTATE 42P01), however the driver surfaces it. */
+function isUndefinedTable(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  if ((err as { code?: unknown }).code === '42P01') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && /relation "?rate_limits"? does not exist/i.test(message);
 }
 
 /** Best-effort cleanup of windows that expired long ago. Never blocks a caller. */

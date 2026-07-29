@@ -297,7 +297,13 @@ In **Settings → Environment Variables**:
 
 #### 4. Run database migrations
 
-> **Deploy ordering:** run `pnpm db:migrate` **before** the new `apps/mcp` build serves traffic. Client registration inserts `oauth_clients.registration_access_token_hash`, so without that column `POST /api/oauth/register` fails. Existing rows get `NULL` and simply cannot use the RFC 7592 management endpoint (they always get `401` there); the admin panel's revoke action still covers them.
+> **Deploy ordering:** run `pnpm db:migrate` **before** the new `apps/mcp` build serves traffic. The migration is idempotent and safe to re-run, and the old build tolerates the new columns, so migrating first is always the correct order. What breaks if you deploy first:
+>
+> | Missing schema | Effect on the new build |
+> | -------------- | ----------------------- |
+> | `rate_limits` table | Rate limiting is **disabled** and every check logs `rate_limits table is missing` at error level. This one deliberately fails *open*: failing closed would 429 every OAuth endpoint and every MCP tool call at once, and a forgotten manual migration should not be a total outage. Grep your logs for that message after any deploy. |
+> | `sync_history.status` / `finished_at` / `partial` | `get_sync_history` errors, and `/api/cron/sync` fails while opening its attempt. The catalogue is not modified, so nothing is corrupted — the sync simply does not run until you migrate. |
+> | `oauth_clients.registration_access_token_hash` | `POST /api/oauth/register` fails. Rows predating the column get `NULL` and cannot use the RFC 7592 management endpoint (always `401` there); the admin panel's revoke action still covers them. |
 
 After the first deploy, run migrations against your Neon database:
 
