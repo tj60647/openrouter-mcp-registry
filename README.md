@@ -91,7 +91,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/models`            | List cached models (`?limit`, `?offset`, `?provider`, `?query`) |
 | `GET`  | `/api/models/:id`        | Get model by canonical ID                                       |
 | `POST` | `/api/resolve`           | Resolve model ID → canonical model                              |
-| `GET`  | `/api/health`            | Health check + sync status summary. `200` when healthy, `503` when the registry is unreachable |
+| `GET`  | `/api/health`            | Health check plus the full `SyncStatus` record (`lastSuccessfulSync`, `lastAttemptedSync`, `lastError`, `recordCount`); `null` when no sync has been recorded. `200` when healthy, `503` when the registry is unreachable |
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
 | `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured). Rate limited 10 attempts / 15 min per username *and* source address — per-username alone would let anyone lock an admin out — `429` beyond that |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |

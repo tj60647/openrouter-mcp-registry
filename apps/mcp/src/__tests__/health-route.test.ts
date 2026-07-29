@@ -42,6 +42,69 @@ describe('GET /api/health', () => {
     expect(body.syncStatus.recordCount).toBe(367);
   });
 
+  // ── Payload completeness ────────────────────────────────────────────────────
+  // The route used to return only lastSuccessfulSync and recordCount. The
+  // /sync-status page renders all four fields from this object, so the two it
+  // dropped rendered as "Never" and "No errors" no matter what had happened —
+  // a failing sync looked healthy on the page built to show sync failures.
+
+  it('returns the whole sync status, not a subset of it', async () => {
+    mockGetSyncStatus.mockResolvedValueOnce({
+      lastSuccessfulSync: new Date('2026-07-28T00:00:48.555Z'),
+      lastAttemptedSync: new Date('2026-07-29T00:00:46.754Z'),
+      lastError: 'OpenRouter API error: 429 Too Many Requests',
+      recordCount: 340,
+    });
+
+    const res = await GET();
+
+    const body = (await res.json()) as { syncStatus: Record<string, unknown> };
+    expect(Object.keys(body.syncStatus).sort()).toEqual([
+      'lastAttemptedSync',
+      'lastError',
+      'lastSuccessfulSync',
+      'recordCount',
+    ]);
+  });
+
+  it('surfaces a failed sync rather than reporting no errors', async () => {
+    mockGetSyncStatus.mockResolvedValueOnce({
+      lastSuccessfulSync: new Date('2026-07-28T00:00:48.555Z'),
+      lastAttemptedSync: new Date('2026-07-29T00:00:46.754Z'),
+      lastError: 'OpenRouter API error: 429 Too Many Requests',
+      recordCount: 340,
+    });
+
+    const res = await GET();
+
+    const body = (await res.json()) as {
+      syncStatus: { lastError: string | null; lastAttemptedSync: string | null };
+    };
+    // The defect in two assertions: both of these were absent, and the page
+    // treats absent as "nothing wrong".
+    expect(body.syncStatus.lastError).toBe('OpenRouter API error: 429 Too Many Requests');
+    expect(body.syncStatus.lastAttemptedSync).not.toBeUndefined();
+  });
+
+  it('distinguishes an attempt that has never happened from one that never failed', async () => {
+    mockGetSyncStatus.mockResolvedValueOnce({
+      lastSuccessfulSync: null,
+      lastAttemptedSync: null,
+      lastError: null,
+      recordCount: 0,
+    });
+
+    const res = await GET();
+
+    const body = (await res.json()) as {
+      syncStatus: { lastAttemptedSync: string | null; lastError: string | null };
+    };
+    // Present-and-null, not missing: the page renders null as "Never", which is
+    // only correct when the field actually arrived.
+    expect(body.syncStatus).toHaveProperty('lastAttemptedSync', null);
+    expect(body.syncStatus).toHaveProperty('lastError', null);
+  });
+
   it('answers 200 when the registry is reachable but has never synced', async () => {
     mockGetSyncStatus.mockResolvedValueOnce(null);
 
