@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ModelSyncService } from '../services/modelSync';
 import type { ModelRepository } from '../services/modelSync';
 import type { ModelProvider, ProviderModel } from '../types/provider';

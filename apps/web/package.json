@@ -6,12 +6,13 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
-    "lint": "next lint",
+    "lint": "eslint src --ext .ts,.tsx --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed.mjs",
-    "db:create-admin": "node scripts/create-admin.mjs"
+    "db:create-admin": "node scripts/create-admin.mjs",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@ai-sdk/react": "3.0.170",
@@ -35,6 +36,7 @@
     "eslint": "^8.57.0",
     "eslint-config-next": "^15.3.1",
     "typescript": "^5.4.5",
-    "vitest": "^1.5.3"
+    "vitest": "^1.5.3",
+    "@vitest/coverage-v8": "^1.6.1"
   }
 }
