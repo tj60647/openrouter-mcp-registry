@@ -22,26 +22,65 @@ import { checkRateLimit } from './rateLimit';
 const VERBOSE_ONLY_FIELDS = ['description', 'metadata'] as const;
 
 /**
+ * Every field of the shared `Model` record, and therefore the complete set of
+ * names `fields` accepts. Kept exhaustive on purpose: `MODEL_FIELDS satisfies
+ * readonly (keyof Model)[]` below makes adding a field to Model without adding
+ * it here a compile error, so the projection cannot silently fall behind.
+ *
+ * There are no nested (`pricing.prompt`) or snake_case spellings — unlike
+ * `sortBy`, which accepts both casings.
+ */
+const MODEL_FIELDS = [
+  'id',
+  'provider',
+  'displayName',
+  'description',
+  'modality',
+  'contextLength',
+  'maxCompletionTokens',
+  'inputPricePer1k',
+  'outputPricePer1k',
+  'imagePricePer1k',
+  'createdAt',
+  'providerExpirationAt',
+  'supportedParameters',
+  'metadata',
+  'fetchedAt',
+  'lastSeenAt',
+  'retiredAt',
+  'isAvailable',
+] as const satisfies readonly (keyof Model)[];
+
+type ModelField = (typeof MODEL_FIELDS)[number];
+
+/**
  * Trims model records returned by the list-style tools so a single page does
  * not blow up the caller's context window.
  *
  * - `fields` (when non-empty) wins: only those fields are returned, in the
- *   order given, with `id` always present. Unknown names are ignored.
+ *   order given, with `id` always present. An unrecognised name is rejected by
+ *   the schema before reaching here.
  * - Otherwise `verbose: true` returns the full record and `verbose: false`
  *   (the default) drops `description` and `metadata`.
  *
  * `get_model`, `resolve_model`, `compare_models` and the `registry://`
  * resources deliberately do NOT use this — they always return full records.
  */
-function projectModels(models: Model[], opts: { verbose: boolean; fields?: string[] }): unknown[] {
+function projectModels(
+  models: Model[],
+  opts: { verbose: boolean; fields?: readonly ModelField[] }
+): unknown[] {
   const { verbose, fields } = opts;
 
   if (fields && fields.length > 0) {
     return models.map((model) => {
-      const source = model as unknown as Record<string, unknown>;
       const picked: Record<string, unknown> = { id: model.id };
       for (const field of fields) {
-        if (field !== 'id' && field in source) picked[field] = source[field];
+        // hasOwnProperty rather than `in`: `in` walks the prototype chain, so
+        // 'constructor' and friends would have passed the old guard.
+        if (field !== 'id' && Object.prototype.hasOwnProperty.call(model, field)) {
+          picked[field] = model[field];
+        }
       }
       return picked;
     });
@@ -101,10 +140,10 @@ function verboseArg() {
 
 function fieldsArg() {
   return z
-    .array(z.string())
+    .array(z.enum(MODEL_FIELDS))
     .optional()
     .describe(
-      'Explicit projection: camelCase Model field names to return (e.g. ["displayName","contextLength","inputPricePer1k"]). Takes precedence over verbose. "id" is always included and unknown field names are ignored.'
+      `Explicit projection: camelCase Model field names to return (e.g. ["displayName","contextLength","inputPricePer1k"]). Takes precedence over verbose. "id" is always included. Only these names are accepted, and an unrecognised one is a validation error rather than a silently missing field: ${MODEL_FIELDS.join(', ')}.`
     );
 }
 

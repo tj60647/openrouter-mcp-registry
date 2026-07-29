@@ -150,7 +150,7 @@ Argument conventions:
 
 - Filter arguments and returned record fields are **camelCase** (`maxInputPricePer1k`, `availableOnly`, `contextLength`). `sortBy` is the one exception: it accepts **both** snake_case and camelCase spellings for the same column (`created_at` ≡ `createdAt`, `input_price_per_1k` ≡ `inputPricePer1k`, and so on for `display_name`, `context_length`, `max_completion_tokens`, `output_price_per_1k`, `image_price_per_1k`). Default `id`.
 - `verbose` (boolean, default `false`) omits `description` and `metadata` from every returned record — they dominate payload size. Pass `verbose: true` to get them back.
-- `fields` (string array) is an explicit projection using camelCase `Model` field names. It wins over `verbose`, always includes `id`, and silently ignores unknown names.
+- `fields` (string array) is an explicit projection using camelCase `Model` field names. It wins over `verbose` and always includes `id`. Only the documented `Model` field names are accepted — an unrecognised one is a validation error, not a silently missing field. Unlike `sortBy`, `fields` takes camelCase only.
 - `verbose`/`fields` apply only to `list_models`, `search_models`, `find_models_by_criteria` and `semantic_search`. `get_model`, `resolve_model`, `compare_models` and the `registry://` resources always return full records.
 - Prices are **USD per 1,000 tokens** throughout.
 - `modality` is matched as a case-insensitive substring of OpenRouter's whole `inputs->outputs` string. To find vision models match the **input** side (`image->`); `text->image` is an image *generator*.

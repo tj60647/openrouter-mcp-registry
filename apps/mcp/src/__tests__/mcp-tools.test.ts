@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { z } from 'zod';
+import type { ZodTypeAny } from 'zod';
 import type { Model, SyncStatus, SyncHistoryEntry } from '@openrouter-mcp/shared';
 
 // ── Hoisted shared state (captured tool handlers) ─────────────────────────────
@@ -28,26 +30,49 @@ const toolHandlers = vi.hoisted(
 type ContentItem = { type: string; text: string };
 type ToolResult = { content: ContentItem[]; isError?: boolean };
 
+/**
+ * Zod input schemas, captured per tool.
+ *
+ * The mock used to bind the schema argument to `_schema` and drop it, so zod
+ * never executed in any test: every carefully bounded `.min()`, `.max()`,
+ * `.enum()` and `.default()` was untested, and handlers were invoked with raw
+ * unvalidated objects. Capturing it lets tests parse input the way the wire
+ * protocol does.
+ */
+const toolSchemas = vi.hoisted(() => ({}) as Record<string, Record<string, ZodTypeAny>>);
+
 // ── Mock the MCP SDK ──────────────────────────────────────────────────────────
+// The real call is the 4-arg overload server.tool(name, description,
+// paramsSchema, handler), where paramsSchema is a ZodRawShape -- a plain object
+// of zod schemas, not a z.object() and not JSON Schema. instrumentUsage
+// rewraps the LAST argument before this sees it, so args[2] is still the schema.
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: vi.fn().mockImplementation(() => ({
-    tool: vi.fn(
-      (
-        name: string,
-        _desc: string,
-        _schema: unknown,
-        handler: (args: Record<string, unknown>) => Promise<ToolResult>
-      ) => {
-        toolHandlers[name] = handler;
+    tool: vi.fn((...args: unknown[]) => {
+      const name = args[0] as string;
+      const handler = args[args.length - 1];
+      const schema = args.length > 3 ? args[2] : undefined;
+      if (typeof handler === 'function') {
+        toolHandlers[name] = handler as (typeof toolHandlers)[string];
       }
-    ),
+      if (schema && typeof schema === 'object') {
+        toolSchemas[name] = schema as Record<string, ZodTypeAny>;
+      }
+    }),
     resource: vi.fn(),
     prompt: vi.fn(),
     connect: vi.fn().mockResolvedValue(undefined),
   })),
   ResourceTemplate: vi.fn().mockImplementation((template: string) => ({ template })),
 }));
+
+/** Parse tool input exactly as the MCP server would before calling a handler. */
+function parseToolInput(tool: string, input: unknown) {
+  const shape = toolSchemas[tool];
+  if (!shape) throw new Error(`no schema captured for tool "${tool}"`);
+  return z.object(shape).safeParse(input);
+}
 
 // ── Mock db module ────────────────────────────────────────────────────────────
 
@@ -587,18 +612,60 @@ describe('model projection (verbose / fields)', () => {
     expect(Object.keys(firstRecord(result))).toEqual(['id', 'displayName', 'inputPricePer1k']);
   });
 
-  it('ignores unknown field names instead of erroring', async () => {
-    mockGetModels.mockResolvedValueOnce([verboseModel]);
+  // The old behaviour -- unknown names dropped silently -- meant an agent that
+  // typo'd a field got a 200 with the datum missing and could reasonably
+  // conclude the datum did not exist. It is now a validation error.
+  //
+  // These assert against the captured schema, not the handler: the handler
+  // never sees an unknown name any more, so asserting on its output would
+  // prove nothing about what the wire protocol accepts.
 
-    const result = await toolHandlers['list_models']!({
-      limit: 10,
-      offset: 0,
+  it('rejects an unknown field name instead of silently dropping it', () => {
+    const parsed = parseToolInput('list_models', {
       fields: ['displayName', 'notAFieldAtAll'],
     });
 
-    const record = firstRecord(result);
-    expect(Object.keys(record)).toEqual(['id', 'displayName']);
-    expect(record).not.toHaveProperty('notAFieldAtAll');
+    expect(parsed.success).toBe(false);
+  });
+
+  it('names the offending value in the validation error', () => {
+    const parsed = parseToolInput('list_models', { fields: ['notAFieldAtAll'] });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(JSON.stringify(parsed.error.issues)).toContain('fields');
+    }
+  });
+
+  it('rejects a snake_case spelling that sortBy would have accepted', () => {
+    // sortBy takes both casings; fields does not. Worth pinning, because that
+    // inconsistency is exactly what an agent would guess wrong about -- and now
+    // it gets told, rather than getting a record with the column missing.
+    expect(parseToolInput('list_models', { fields: ['display_name'] }).success).toBe(false);
+    expect(parseToolInput('list_models', { sortBy: 'display_name' }).success).toBe(true);
+  });
+
+  it('rejects prototype-chain names that the old `in` guard let through', () => {
+    for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      expect(parseToolInput('list_models', { fields: [name] }).success).toBe(false);
+    }
+  });
+
+  it('accepts every field of the Model record', () => {
+    const everyField = Object.keys(verboseModel);
+
+    const parsed = parseToolInput('list_models', { fields: everyField });
+
+    // Guards the enum against drifting behind the Model type: a field that
+    // exists on the record but not in the enum would fail here.
+    expect(parsed.success).toBe(true);
+  });
+
+  it('enforces the same field names on every tool that takes a projection', () => {
+    for (const tool of ['list_models', 'search_models', 'find_models_by_criteria', 'semantic_search']) {
+      expect(parseToolInput(tool, { query: 'x', fields: ['displayName'] }).success).toBe(true);
+      expect(parseToolInput(tool, { query: 'x', fields: ['nope'] }).success).toBe(false);
+    }
   });
 
   it('does not duplicate id when it is requested explicitly', async () => {

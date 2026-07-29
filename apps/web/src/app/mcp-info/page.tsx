@@ -884,9 +884,12 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
             <code>fields</code> (string array, no default) — explicit projection using camelCase{' '}
             <code>Model</code> field names. It{' '}
             <strong style={{ color: 'var(--text)' }}>wins over verbose</strong>. <code>id</code> is
-            always included and comes first; the rest appear in the order you list them; unknown
-            names are silently ignored rather than raising an error. An empty array is treated as
-            not supplied.
+            always included and comes first; the rest appear in the order you list them. Only the
+            names in the Model field table above are accepted — an unrecognised one is a{' '}
+            <strong style={{ color: 'var(--text)' }}>validation error</strong>, not a silently
+            missing field, so a typo cannot be mistaken for absent data. Note that{' '}
+            <code>fields</code> takes camelCase only, unlike <code>sortBy</code>, which accepts
+            both spellings. An empty array is treated as not supplied.
           </li>
         </ul>
         <pre>
