@@ -22,7 +22,7 @@ vi.mock('@vercel/postgres', () => ({
   db: { query: mockQuery },
 }));
 
-import { checkRateLimit, resetPruneScheduleForTests } from '../lib/rateLimit';
+import { checkRateLimit, clearRateLimit, resetPruneScheduleForTests } from '../lib/rateLimit';
 
 const OPTS = { limit: 5, windowMs: 15 * 60_000 };
 
@@ -184,5 +184,33 @@ describe('checkRateLimit', () => {
       .mockRejectedValueOnce(new Error('deadlock detected'));
 
     await expect(checkRateLimit('k', OPTS)).resolves.toBe(true);
+  });
+});
+
+// ── clearRateLimit ────────────────────────────────────────────────────────────
+
+describe('clearRateLimit', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    resetPruneScheduleForTests();
+  });
+
+  it('deletes only the counter for the given key', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await clearRateLimit('admin:verify-login:admin:1.2.3.4');
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('DELETE FROM rate_limits');
+    expect(sql).toContain('WHERE key = $1');
+    expect(params).toEqual(['admin:verify-login:admin:1.2.3.4']);
+  });
+
+  it('swallows a failure rather than breaking the caller', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+    // Leaving the counter in place is the safe direction: worst case the window
+    // expires on its own.
+    await expect(clearRateLimit('k')).resolves.toBeUndefined();
   });
 });

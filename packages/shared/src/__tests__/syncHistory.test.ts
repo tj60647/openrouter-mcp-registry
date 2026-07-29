@@ -93,3 +93,37 @@ describe('rowToSyncHistoryEntry', () => {
     expect(entry.recordCount).toBe(367);
   });
 });
+
+// ── Rows written by an older build after the migration ────────────────────────
+// The migration deliberately leaves `status` nullable with no default. An
+// earlier revision defaulted it to 'running', which meant a row inserted by the
+// PREVIOUS build -- whose INSERT lists only (synced_at, success, record_count,
+// error) -- took that default and was reported as an attempt whose process
+// died, even when it recorded a perfectly successful sync of 512 models.
+// That window is exactly the deploy ordering the README recommends.
+
+describe('rows written by an older build', () => {
+  it('reads a successful old-build row as a success, not as running', () => {
+    const entry = rowToSyncHistoryEntry(
+      makeRow({ status: null, success: true, record_count: 512, error: null, finished_at: null })
+    );
+
+    expect(entry.status).toBe('success');
+    expect(entry.status).not.toBe('running');
+    expect(entry.success).toBe(true);
+    expect(entry.recordCount).toBe(512);
+  });
+
+  it('reads a failed old-build row as a failure', () => {
+    const entry = rowToSyncHistoryEntry(
+      makeRow({ status: null, success: false, record_count: null, error: 'upstream 502', finished_at: null })
+    );
+
+    expect(entry.status).toBe('failure');
+    expect(entry.error).toBe('upstream 502');
+  });
+
+  it('defaults partial to false for a row written before the column existed', () => {
+    expect(rowToSyncHistoryEntry(makeRow({ partial: null })).partial).toBe(false);
+  });
+});

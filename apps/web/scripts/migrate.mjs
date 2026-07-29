@@ -154,11 +154,19 @@ async function migrate() {
   // Sync history log — one row per sync ATTEMPT, opened as 'running' when the
   // attempt starts and updated in place when it finishes. `success` is NULL
   // while running, so a `success = FALSE` row is always a genuine failure.
+  // `status` is deliberately nullable with NO default. Every writer in the
+  // current build sets it explicitly, so a default would only ever apply to a
+  // row written by an OLDER build — which inserts (synced_at, success,
+  // record_count, error) and nothing else. A default of 'running' would stamp
+  // those rows as in-flight, and rowToSyncHistoryEntry short-circuits on a
+  // non-NULL status, so a successful sync would be reported as one whose
+  // process died. Leaving it NULL lets the reader's legacy inference classify
+  // them from `success`, which is exactly what it is there for.
   await sql`
     CREATE TABLE IF NOT EXISTS sync_history (
       id BIGSERIAL PRIMARY KEY,
       synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      status TEXT NOT NULL DEFAULT 'running',
+      status TEXT,
       success BOOLEAN,
       record_count INTEGER,
       error TEXT,
@@ -174,12 +182,61 @@ async function migrate() {
   // sweep because the upstream response looked truncated.
   await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`ALTER TABLE sync_history ALTER COLUMN success DROP NOT NULL`;
+  // Both must be dropped before the passes below, which write NULL into status.
+  await sql`ALTER TABLE sync_history ALTER COLUMN status DROP DEFAULT`;
+  await sql`ALTER TABLE sync_history ALTER COLUMN status DROP NOT NULL`;
 
-  // Backfill in three passes, most specific first. The middle pass is the one
-  // that matters: rows with success = FALSE, no error and no record count are
-  // the start markers the old two-row writer emitted before every sync. They
-  // were never real failures, so they become 'running' (an attempt that was
-  // opened and never finalised) rather than being counted as outages.
+  // Repair for databases migrated by an earlier revision of this script, which
+  // left status defaulting to 'running' and NOT NULL. Rows an older build
+  // inserted after that migration took the default, so they carry
+  // status = 'running' alongside a real verdict in `success` — a combination the
+  // current build never writes, since it clears `success` when it opens an
+  // attempt. Clearing status hands them to the backfill passes below.
+  await sql`
+    UPDATE sync_history
+    SET status = NULL
+    WHERE status = 'running' AND success IS NOT NULL
+  `;
+
+  // Retire the old two-row-per-sync artefact.
+  //
+  // The previous writer emitted a start marker (success = FALSE, no error, no
+  // record count) before contacting OpenRouter, then the real outcome a couple
+  // of seconds later. Under the one-row-per-attempt model those markers are
+  // duplicates: the outcome row beside each one already records the same
+  // attempt. Leaving them would make `get_sync_history` report roughly half of
+  // all historical syncs as attempts that died mid-run, which is the opposite
+  // of the truth and directly contradicts the tool's own description.
+  //
+  // A marker is only removed when a completed row follows it within ten
+  // minutes; that pairing is what proves it was a marker rather than an attempt
+  // that genuinely never finished. The surviving row carries the outcome, the
+  // record count and the timestamp — all the marker held beyond that was a
+  // start time two seconds earlier. An UNPAIRED marker is left alone and
+  // classified 'running' below, which for that row is accurate.
+  //
+  // This is the one destructive statement in the file. It is deliberate: these
+  // rows exist only because of the defect fixed in this release, and no
+  // consumer reads them (`get_sync_history` is the sole reader of this table).
+  await sql`
+    DELETE FROM sync_history marker
+    WHERE marker.status IS NULL
+      AND marker.success = FALSE
+      AND marker.error IS NULL
+      AND marker.record_count IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM sync_history outcome
+        WHERE outcome.status IS NULL
+          AND (outcome.success = TRUE OR outcome.error IS NOT NULL)
+          AND outcome.synced_at > marker.synced_at
+          AND outcome.synced_at <= marker.synced_at + INTERVAL '10 minutes'
+      )
+  `;
+
+  // Backfill in three passes, most specific first. The middle pass now catches
+  // only UNPAIRED start markers — attempts the old code opened and never
+  // completed — for which 'running' is the honest classification.
   await sql`
     UPDATE sync_history
     SET status = 'success', finished_at = COALESCE(finished_at, synced_at)
@@ -197,9 +254,6 @@ async function migrate() {
     SET status = 'failure', finished_at = COALESCE(finished_at, synced_at)
     WHERE status IS NULL
   `;
-
-  await sql`ALTER TABLE sync_history ALTER COLUMN status SET DEFAULT 'running'`;
-  await sql`ALTER TABLE sync_history ALTER COLUMN status SET NOT NULL`;
 
   await sql`
     CREATE INDEX IF NOT EXISTS sync_history_synced_at_idx ON sync_history(synced_at DESC)

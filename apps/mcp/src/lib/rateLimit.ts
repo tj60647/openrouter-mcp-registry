@@ -95,6 +95,21 @@ export async function checkRateLimit(
   }
 }
 
+/**
+ * Forget the counter for `key`, so the next request starts a fresh window.
+ *
+ * For callers that only mean to limit *failed* attempts: charge the budget
+ * before the check, then clear it once the attempt succeeds. Best-effort — a
+ * failure here leaves the counter in place, which is the safe direction.
+ */
+export async function clearRateLimit(key: string): Promise<void> {
+  try {
+    await db.query(`DELETE FROM rate_limits WHERE key = $1`, [key]);
+  } catch {
+    /* the window will expire on its own */
+  }
+}
+
 /** Postgres `undefined_table` (SQLSTATE 42P01), however the driver surfaces it. */
 function isUndefinedTable(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;

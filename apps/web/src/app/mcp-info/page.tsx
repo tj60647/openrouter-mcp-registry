@@ -90,7 +90,7 @@ const TOOLS = [
       'History of sync attempts, most recent first, with success/failure, record count, and error text.',
     params: '{ limit?: number = 50 (1–200) }',
     returns:
-      '{ history: Array<{ id, syncedAt, status, success, recordCount, error, finishedAt }>, count: number }',
+      '{ history: Array<{ id, syncedAt, status, success, recordCount, error, finishedAt, partial }>, count: number }',
     notes:
       'One row per sync attempt. The row is opened as status "running" (success: null) before OpenRouter is contacted and updated in place when the attempt ends, so success: false always means a real failure and always carries an error. syncedAt is the start, finishedAt the end (null while running). A "running" row older than the newest finished row is an attempt whose process died mid-sync.',
   },

@@ -569,11 +569,11 @@ describe('createModelRepository retirement sweep', () => {
     };
   }
 
-  /** `available` is the count of currently-available rows the baseline query sees. */
-  function primeClient({ available, retired = 0 }: { available: number; retired?: number }) {
+  /** `lastFetched` is sync_status.record_count — how many models the last sync fetched. */
+  function primeClient({ lastFetched, retired = 0 }: { lastFetched: number; retired?: number }) {
     mockClientQuery.mockReset();
     mockClientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ count: String(available) }] };
+      if (sql.includes('FROM sync_status')) return { rows: [{ record_count: String(lastFetched) }] };
       if (sql.includes('UPDATE models')) return { rows: [], rowCount: retired };
       return { rows: [], rowCount: 0 };
     });
@@ -589,7 +589,7 @@ describe('createModelRepository retirement sweep', () => {
   }
 
   it('sweeps once globally rather than once per provider', async () => {
-    primeClient({ available: 3 });
+    primeClient({ lastFetched: 3 });
 
     await createModelRepository().upsertModels([
       makeModel({ id: 'openai/gpt-4o', provider: 'openai' }),
@@ -602,7 +602,7 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('does not scope the sweep to the providers present in the response', async () => {
-    primeClient({ available: 1 });
+    primeClient({ lastFetched: 1 });
 
     await createModelRepository().upsertModels([makeModel({ provider: 'openai' })]);
 
@@ -612,7 +612,7 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('retires every row not touched by this sync, whatever its provider', async () => {
-    primeClient({ available: 1 });
+    primeClient({ lastFetched: 1 });
 
     await createModelRepository().upsertModels([makeModel({ provider: 'openai' })]);
 
@@ -622,7 +622,7 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('reports how many rows it retired', async () => {
-    primeClient({ available: 1, retired: 3 });
+    primeClient({ lastFetched: 1, retired: 3 });
 
     const outcome = await createModelRepository().upsertModels([makeModel()]);
 
@@ -634,7 +634,7 @@ describe('createModelRepository retirement sweep', () => {
   // would mass-retire everything missing in one transaction.
 
   it('skips the sweep when the response is far smaller than the catalogue', async () => {
-    primeClient({ available: 400 });
+    primeClient({ lastFetched: 400 });
 
     const outcome = await createModelRepository().upsertModels(
       Array.from({ length: 100 }, (_, i) => makeModel({ id: `openai/m${i}` }))
@@ -645,7 +645,7 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('still upserts the models it did receive when the sweep is skipped', async () => {
-    primeClient({ available: 400 });
+    primeClient({ lastFetched: 400 });
 
     await createModelRepository().upsertModels([makeModel()]);
 
@@ -655,7 +655,7 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('runs the sweep when the response covers most of the catalogue', async () => {
-    primeClient({ available: 400 });
+    primeClient({ lastFetched: 400 });
 
     const outcome = await createModelRepository().upsertModels(
       Array.from({ length: 390 }, (_, i) => makeModel({ id: `openai/m${i}` }))
@@ -667,7 +667,7 @@ describe('createModelRepository retirement sweep', () => {
 
   it('runs the sweep on a genuine large-but-plausible shrink', async () => {
     // 340 -> 367 in the other direction: growth must never trip the guard.
-    primeClient({ available: 340 });
+    primeClient({ lastFetched: 340 });
 
     const outcome = await createModelRepository().upsertModels(
       Array.from({ length: 367 }, (_, i) => makeModel({ id: `openai/m${i}` }))
@@ -676,8 +676,8 @@ describe('createModelRepository retirement sweep', () => {
     expect(outcome.sweepSkipped).toBe(false);
   });
 
-  it('does not trip the guard on an empty catalogue', async () => {
-    primeClient({ available: 0 });
+  it('does not trip the guard on the very first sync', async () => {
+    primeClient({ lastFetched: 0 });
 
     const outcome = await createModelRepository().upsertModels([makeModel()]);
 
@@ -685,15 +685,15 @@ describe('createModelRepository retirement sweep', () => {
   });
 
   it('reads the baseline before any upsert', async () => {
-    primeClient({ available: 1 });
+    primeClient({ lastFetched: 1 });
 
     await createModelRepository().upsertModels([makeModel()]);
 
     const order = statements();
-    const baseline = order.findIndex((s) => s.includes('SELECT COUNT(*)'));
+    const baseline = order.findIndex((s) => s.includes('FROM sync_status'));
     const firstUpsert = order.findIndex((s) => s.includes('INSERT INTO models'));
-    // A model returning from retirement would otherwise inflate the baseline
-    // the guard compares against.
+    // Reading it mid-transaction, after completeSyncAttempt has moved on to the
+    // next run's number, would compare this fetch against itself.
     expect(baseline).toBeGreaterThan(-1);
     expect(baseline).toBeLessThan(firstUpsert);
   });
@@ -701,7 +701,7 @@ describe('createModelRepository retirement sweep', () => {
   it('rolls back and rethrows when a statement fails', async () => {
     mockClientQuery.mockReset();
     mockClientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ count: '1' }] };
+      if (sql.includes('FROM sync_status')) return { rows: [{ record_count: '1' }] };
       if (sql.includes('INSERT INTO models')) throw new Error('constraint violation');
       return { rows: [], rowCount: 0 };
     });
@@ -711,5 +711,80 @@ describe('createModelRepository retirement sweep', () => {
     );
     expect(statements()).toContain('ROLLBACK');
     expect(statements()).not.toContain('COMMIT');
+  });
+});
+
+// ── Volume guard baseline ─────────────────────────────────────────────────────
+// The guard compares the fetched count against sync_status.record_count -- how
+// many models the LAST sync fetched -- and NOT against the count of rows flagged
+// available. Those are not interchangeable: the available count is inflated by
+// exactly the retirement backlog this sweep exists to clear, and since only the
+// sweep lowers it, one skip would latch the guard on permanently.
+
+describe('createModelRepository sweep guard baseline', () => {
+  const SYNC_AT = new Date('2026-07-29T00:00:46.754Z');
+
+  function model(id: string): Model {
+    return {
+      id, provider: 'openai', displayName: id, description: null, modality: null,
+      contextLength: null, maxCompletionTokens: null, inputPricePer1k: null,
+      outputPricePer1k: null, imagePricePer1k: null, createdAt: null,
+      providerExpirationAt: null, supportedParameters: [], metadata: {},
+      fetchedAt: SYNC_AT, lastSeenAt: SYNC_AT, retiredAt: null, isAvailable: true,
+    };
+  }
+
+  const batch = (n: number) => Array.from({ length: n }, (_, i) => model(`openai/m${i}`));
+
+  /** Distinguishes the two candidate baselines by giving them different values. */
+  function prime({ lastFetched, available }: { lastFetched: number; available: number }) {
+    mockClientQuery.mockReset();
+    mockClientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM sync_status')) return { rows: [{ record_count: String(lastFetched) }] };
+      if (sql.includes('COUNT(*)')) return { rows: [{ count: String(available) }] };
+      if (sql.includes('UPDATE models')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+  }
+
+  it('clears a retirement backlog on the first sync instead of latching off', async () => {
+    // 1000 rows still flagged available, 250 of them stale leftovers the old
+    // per-provider sweep could never reach. Upstream legitimately returns 750.
+    // Against the available count, 750 < 800 would skip -- and because only the
+    // sweep lowers that count, it would skip again forever.
+    prime({ lastFetched: 750, available: 1000 });
+
+    const outcome = await createModelRepository().upsertModels(batch(750));
+
+    expect(outcome.sweepSkipped).toBe(false);
+  });
+
+  it('does not read the available-row count for the guard at all', async () => {
+    prime({ lastFetched: 750, available: 1000 });
+
+    await createModelRepository().upsertModels(batch(750));
+
+    const sql = mockClientQuery.mock.calls.map(([s]) => s as string);
+    expect(sql.some((s) => s.includes('FROM sync_status'))).toBe(true);
+    expect(sql.some((s) => s.includes('COUNT(*)') && s.includes('is_available'))).toBe(false);
+  });
+
+  it('still catches a one-off truncated response', async () => {
+    prime({ lastFetched: 750, available: 750 });
+
+    const outcome = await createModelRepository().upsertModels(batch(100));
+
+    expect(outcome.sweepSkipped).toBe(true);
+  });
+
+  it('accepts a sustained shrink on the sync after the first dip', async () => {
+    // record_count follows the fetched count, so once 100 is the previous run's
+    // number a second 100 is no longer a dip. This is what makes the guard
+    // self-correcting rather than a permanent latch.
+    prime({ lastFetched: 100, available: 750 });
+
+    const outcome = await createModelRepository().upsertModels(batch(100));
+
+    expect(outcome.sweepSkipped).toBe(false);
   });
 });

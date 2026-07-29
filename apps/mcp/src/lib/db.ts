@@ -4,12 +4,17 @@ import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-
 import type { ModelRepository, UpsertOutcome, SyncAttemptOutcome } from '@openrouter-mcp/shared';
 
 /**
- * Minimum share of the currently-available catalogue an upstream response must
+ * Minimum share of the previous sync's model count an upstream response must
  * contain before the retirement sweep is allowed to run.
  *
  * OpenRouter's catalogue moves by a handful of models a day, so a response
- * holding under 80% of what we already have is far more likely to be a
- * truncated or degraded fetch than a real mass retirement.
+ * holding under 80% of the last one is far more likely to be a truncated or
+ * degraded fetch than a real mass retirement.
+ *
+ * Because the baseline follows the fetched count rather than the stored one,
+ * this is self-correcting: a one-off dip skips a single sweep, and a shrink
+ * that is actually real is accepted on the next sync, when it is no longer a
+ * dip relative to the run before it.
  */
 const SWEEP_MIN_COVERAGE = 0.8;
 
@@ -333,12 +338,20 @@ export function createModelRepository(): ModelRepository {
       try {
         await client.query('BEGIN');
 
-        // Baseline for the volume guard, read before any upsert so a model
-        // returning from retirement cannot inflate it.
-        const baselineResult = await client.query<{ count: string }>(
-          `SELECT COUNT(*)::text AS count FROM models WHERE is_available = TRUE`
+        // Baseline for the volume guard: how many models the LAST sync fetched,
+        // not how many rows are currently flagged available.
+        //
+        // Those two numbers are not interchangeable. The count of available rows
+        // is inflated by exactly the backlog this sweep exists to clear, so
+        // using it would compare a good fetch against a number the sweep itself
+        // is supposed to bring down — and since only the sweep lowers it, one
+        // skip would latch the guard on forever. record_count tracks the
+        // upstream catalogue, so a one-off truncation trips the guard while a
+        // genuine sustained shrink is accepted on the following sync.
+        const baselineResult = await client.query<{ record_count: string }>(
+          `SELECT record_count::text AS record_count FROM sync_status WHERE id = 1`
         );
-        const availableBefore = Number(baselineResult.rows[0]?.count ?? 0);
+        const lastFetchedCount = Number(baselineResult.rows[0]?.record_count ?? 0);
 
         for (const model of models) {
           await client.query(
@@ -407,7 +420,7 @@ export function createModelRepository(): ModelRepository {
         // day is recoverable; retiring most of the catalogue on one bad
         // response is not.
         const sweepSkipped =
-          availableBefore > 0 && models.length < availableBefore * SWEEP_MIN_COVERAGE;
+          lastFetchedCount > 0 && models.length < lastFetchedCount * SWEEP_MIN_COVERAGE;
 
         let retired = 0;
         if (!sweepSkipped) {
