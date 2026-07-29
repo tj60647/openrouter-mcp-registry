@@ -85,7 +85,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  if (!checkRateLimit(`oauth:register:${ip}`, REGISTER_RATE_LIMIT)) {
+  if (!(await checkRateLimit(`oauth:register:${ip}`, REGISTER_RATE_LIMIT))) {
     return NextResponse.json({ error: 'too_many_requests' }, { status: 429 });
   }
 

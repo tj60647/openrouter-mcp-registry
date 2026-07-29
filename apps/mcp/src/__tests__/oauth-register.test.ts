@@ -25,6 +25,18 @@ vi.mock('@vercel/postgres', () => ({
   db: { query: mockQuery },
 }));
 
+// ── Mock the rate limiter ─────────────────────────────────────────────────────
+// It is Postgres-backed, so leaving it unmocked would consume entries from
+// mockQuery's queue and make every route answer 429. Its own behaviour is
+// covered in rateLimit.test.ts; here it defaults to "allow" and individual
+// tests flip it to exercise the routes' 429 paths.
+
+const mockCheckRateLimit = vi.hoisted(() => vi.fn(async () => true));
+
+vi.mock('../lib/rateLimit', () => ({
+  checkRateLimit: (...args: unknown[]) => mockCheckRateLimit(...(args as [])),
+}));
+
 // ── Imports under test (after mock registration) ─────────────────────────────
 
 import { hashClientSecret } from '../lib/oauth';
@@ -101,6 +113,8 @@ function manageRequest(method: string, headers: Record<string, string> = {}): Ne
 beforeEach(() => {
   mockSql.mockReset();
   mockSql.mockResolvedValue({ rows: [], rowCount: 0 });
+  mockCheckRateLimit.mockReset();
+  mockCheckRateLimit.mockResolvedValue(true);
   vi.stubEnv('NEXT_PUBLIC_MCP_URL', 'http://localhost:3001');
   vi.stubEnv('OAUTH_JWT_SECRET', 'test-jwt-secret-at-least-32-bytes-long!!');
   vi.stubEnv('OAUTH_DISABLE_REGISTRATION', '');
@@ -577,5 +591,63 @@ describe('GET/DELETE /api/oauth/register/[client_id]', () => {
 
     expect(res.status).toBe(401);
     expect(mockSql).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+// The limiter runs BEFORE any secret comparison so the secret itself cannot be
+// brute-forced through the limiter's own timing. These pin both the 429 and
+// that ordering.
+
+describe('rate limiting', () => {
+  it('rejects registration with 429 once the limit is exceeded', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+
+    const res = await registerPost(registerRequest({ client_name: 'Flood' }));
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('too_many_requests');
+  });
+
+  it('rejects a token request with 429 once the limit is exceeded', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+
+    const res = await tokenPost(
+      tokenRequest({ grant_type: 'client_credentials', client_id: 'x', client_secret: 'y' })
+    );
+
+    expect(res.status).toBe(429);
+  });
+
+  it('does not touch the database when the registration limit is exceeded', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+    mockSql.mockClear();
+
+    await registerPost(registerRequest({ client_name: 'Flood' }));
+
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it('checks the limit before comparing the initial access token', async () => {
+    vi.stubEnv('OAUTH_REGISTRATION_ACCESS_TOKEN', 'super-secret-token');
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+
+    // Correct credentials must still be rejected with 429, not 201: if the
+    // token were compared first, a caller could probe it without limit.
+    const res = await registerPost(
+      registerRequest({ client_name: 'Flood' }, { authorization: 'Bearer super-secret-token' })
+    );
+
+    expect(res.status).toBe(429);
+  });
+
+  it('keys the registration limit on the client IP', async () => {
+    await registerPost(
+      registerRequest({ client_name: 'A' }, { 'x-forwarded-for': '203.0.113.7' })
+    );
+
+    const [key] = mockCheckRateLimit.mock.calls[0] as unknown as [string];
+    expect(key).toBe('oauth:register:203.0.113.7');
   });
 });

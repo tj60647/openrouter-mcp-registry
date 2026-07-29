@@ -274,6 +274,19 @@ async function migrate() {
   // registration. NULL for clients registered before this column existed.
   await sql`ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS registration_access_token_hash TEXT`;
 
+  // Shared rate-limit counters. Lives in Postgres rather than process memory so
+  // a limit is enforced across serverless instances instead of per warm lambda.
+  await sql`
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      key TEXT PRIMARY KEY,
+      window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      count INTEGER NOT NULL DEFAULT 0
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS rate_limits_window_start_idx ON rate_limits(window_start)
+  `;
+
   // Per-client MCP usage log — one row per tool call, for usage-by-agent reporting.
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_usage (

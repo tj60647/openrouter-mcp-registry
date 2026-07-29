@@ -93,7 +93,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/resolve`           | Resolve model ID → canonical model                              |
 | `GET`  | `/api/health`            | Health check + sync status summary. `200` when healthy, `503` when the registry is unreachable |
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
-| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured) |
+| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured). Rate limited per username: 10 attempts / 15 min, `429` beyond that |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
 | `GET`  | `/api/admin/clients`     | List registered OAuth clients (requires `ADMIN_SECRET`)         |
 | `POST` | `/api/admin/clients/revoke` | Revoke or restore an OAuth client (requires `ADMIN_SECRET`)  |

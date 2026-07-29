@@ -1,58 +1,99 @@
 /**
- * Lightweight sliding-window rate limiter backed by a per-process in-memory map.
+ * Fixed-window rate limiter backed by Postgres.
  *
- * On serverless (Vercel) each function instance has its own memory space, so
- * limits are enforced per-instance rather than globally. This is intentional:
- * it still provides meaningful protection against obvious per-client abuse
- * without requiring a shared store.
+ * The previous implementation was a module-level Map. On Vercel each function
+ * instance has its own memory, so "5 registrations per 15 minutes" was really
+ * 5 per 15 minutes *per warm lambda*, and a caller fanning requests across cold
+ * starts met an empty map every time. Since this guards dynamic client
+ * registration, the token endpoint, the authorize endpoint and admin credential
+ * verification, per-instance counting is not a limit so much as a suggestion.
  *
- * Old entries are pruned lazily whenever the map grows beyond PRUNE_THRESHOLD
- * to avoid unbounded memory growth.
+ * The counter now lives in the `rate_limits` table, which apps/mcp already
+ * reaches on every one of these paths, so the limit is shared across instances
+ * and survives cold starts.
+ *
+ * NOTE for apps/web: it deliberately has no runtime database access (see the
+ * env boundary in README) and keeps a local in-memory limiter as a cheap first
+ * pass. Its durable enforcement is the limiter on the apps/mcp endpoint it
+ * proxies to.
  */
 
-interface Entry {
-  count: number;
-  windowStart: number;
-  windowMs: number;
-}
-
-const PRUNE_THRESHOLD = 5_000;
-const store = new Map<string, Entry>();
+import { db } from '@vercel/postgres';
 
 export interface RateLimitOptions {
   /** Maximum number of requests allowed within `windowMs`. */
   limit: number;
-  /** Sliding window duration in milliseconds. */
+  /** Window duration in milliseconds. */
   windowMs: number;
 }
+
+/** At most one prune per instance per hour; the prune itself is idempotent. */
+const PRUNE_INTERVAL_MS = 60 * 60_000;
+/** Rows untouched for this long cannot belong to a live window. */
+const PRUNE_HORIZON_MS = 24 * 60 * 60_000;
+let lastPruneAt = 0;
 
 /**
  * Check and record a rate-limit hit for `key`.
  * Returns `true` when the request is allowed, `false` when the limit is exceeded.
+ *
+ * Check and increment happen in one statement so concurrent requests on
+ * different instances cannot both read the same pre-increment count.
+ *
+ * Fails **closed**: if the counter cannot be read the request is denied. Every
+ * caller of this function is an authentication path that needs the same
+ * database anyway, so a failure here means the request was going to fail
+ * regardless — and failing open would drop brute-force protection at exactly
+ * the moment the database is unhealthy.
  */
-export function checkRateLimit(key: string, { limit, windowMs }: RateLimitOptions): boolean {
-  const now = Date.now();
-  const entry = store.get(key);
+export async function checkRateLimit(
+  key: string,
+  { limit, windowMs }: RateLimitOptions
+): Promise<boolean> {
+  try {
+    const result = await db.query<{ count: string }>(
+      `INSERT INTO rate_limits (key, window_start, count)
+       VALUES ($1, NOW(), 1)
+       ON CONFLICT (key) DO UPDATE SET
+         count = CASE
+           WHEN rate_limits.window_start < NOW() - ($2::bigint * INTERVAL '1 millisecond')
+           THEN 1 ELSE rate_limits.count + 1
+         END,
+         window_start = CASE
+           WHEN rate_limits.window_start < NOW() - ($2::bigint * INTERVAL '1 millisecond')
+           THEN NOW() ELSE rate_limits.window_start
+         END
+       RETURNING count::text AS count`,
+      [key, windowMs]
+    );
 
-  if (!entry || now - entry.windowStart > entry.windowMs) {
-    store.set(key, { count: 1, windowStart: now, windowMs });
-    maybePrune(now);
-    return true;
-  }
+    const count = Number(result.rows[0]?.count);
+    if (!Number.isFinite(count)) return false;
 
-  if (entry.count >= limit) {
+    void maybePrune();
+    return count <= limit;
+  } catch {
     return false;
   }
-
-  entry.count += 1;
-  return true;
 }
 
-function maybePrune(now: number): void {
-  if (store.size < PRUNE_THRESHOLD) return;
-  for (const [key, entry] of store) {
-    if (now - entry.windowStart > entry.windowMs) {
-      store.delete(key);
-    }
+/** Best-effort cleanup of windows that expired long ago. Never blocks a caller. */
+async function maybePrune(): Promise<void> {
+  const now = Date.now();
+  if (now - lastPruneAt < PRUNE_INTERVAL_MS) return;
+  lastPruneAt = now;
+  try {
+    await db.query(
+      `DELETE FROM rate_limits
+       WHERE window_start < NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
+      [PRUNE_HORIZON_MS]
+    );
+  } catch {
+    /* pruning is housekeeping — never fail a request over it */
   }
+}
+
+/** Test seam: forget when this instance last pruned. */
+export function resetPruneScheduleForTests(): void {
+  lastPruneAt = 0;
 }
