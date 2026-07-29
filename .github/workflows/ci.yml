@@ -15,8 +15,11 @@ permissions:
   contents: read
 
 jobs:
+  # The job name doubles as the branch-protection status-check context, so keep
+  # it short and stable: renaming it silently detaches the required check and
+  # main stops being gated. The individual steps carry the descriptive names.
   verify:
-    name: lint / typecheck / test / build
+    name: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
