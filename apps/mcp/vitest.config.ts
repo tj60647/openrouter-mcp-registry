@@ -12,7 +12,7 @@ export default defineConfig({
       // Set at the current floor, not an aspirational target: the job of these
       // numbers is to fail the build when coverage regresses. Ratchet them up
       // as gaps are closed; never lower one to make a build pass.
-      thresholds: { lines: 58, functions: 60, branches: 70, statements: 58 },
+      thresholds: { lines: 66, functions: 65, branches: 75, statements: 66 },
     },
   },
 });
