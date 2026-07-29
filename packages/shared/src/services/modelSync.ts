@@ -4,7 +4,20 @@ import { canonicalizeModelId, extractProvider } from './canonicalize';
 
 export interface ModelRepository {
   upsertModels(models: Model[]): Promise<void>;
-  recordSyncAttempt(success: boolean, error?: string, count?: number): Promise<void>;
+  /**
+   * Open a sync-attempt record in the `running` state and return its id, so the
+   * finaliser can update that same row. Returning `null` means the attempt could
+   * not be recorded (the outcome is then appended as a standalone row instead) —
+   * an unrecordable attempt must never abort the sync itself.
+   */
+  beginSyncAttempt(): Promise<number | null>;
+  /** Close the attempt opened by `beginSyncAttempt`, in place. */
+  completeSyncAttempt(
+    attemptId: number | null,
+    success: boolean,
+    error?: string,
+    count?: number
+  ): Promise<void>;
   acquireSyncLock(): Promise<boolean>;
   releaseSyncLock(): Promise<void>;
 }
@@ -32,8 +45,12 @@ export class ModelSyncService {
       return { success: true, modelsUpserted: 0, skipped: true };
     }
 
+    // Opened before the network call and finalised in place, so one attempt
+    // produces exactly one history row whatever the outcome.
+    let attemptId: number | null = null;
+
     try {
-      await this.repository.recordSyncAttempt(false);
+      attemptId = await this.repository.beginSyncAttempt();
       const providerModels = await this.provider.fetchModels();
       const now = new Date();
 
@@ -85,12 +102,12 @@ export class ModelSyncService {
       });
 
       await this.repository.upsertModels(models);
-      await this.repository.recordSyncAttempt(true, undefined, models.length);
+      await this.repository.completeSyncAttempt(attemptId, true, undefined, models.length);
 
       return { success: true, modelsUpserted: models.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.repository.recordSyncAttempt(false, message);
+      await this.repository.completeSyncAttempt(attemptId, false, message);
       return { success: false, modelsUpserted: 0, error: message };
     } finally {
       await this.repository.releaseSyncLock();

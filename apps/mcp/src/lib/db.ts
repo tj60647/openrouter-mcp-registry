@@ -202,7 +202,7 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
 
 export async function getSyncHistory(limit = 50): Promise<SyncHistoryEntry[]> {
   const result = await db.query<SyncHistoryRow>(
-    `SELECT id, synced_at, success, record_count, error
+    `SELECT id, synced_at, status, success, record_count, error, finished_at
      FROM sync_history
      ORDER BY synced_at DESC
      LIMIT $1`,
@@ -397,7 +397,43 @@ export function createModelRepository(): ModelRepository {
       }
     },
 
-    async recordSyncAttempt(success: boolean, error?: string, count?: number): Promise<void> {
+    /**
+     * Open a `running` history row and stamp `sync_status.last_attempted_sync`.
+     *
+     * `last_error` is deliberately left alone: it describes the last *completed*
+     * attempt, so blanking it here would make the dashboard show "no errors"
+     * for as long as a sync is in flight, even when the previous run failed.
+     */
+    async beginSyncAttempt(): Promise<number | null> {
+      const now = new Date().toISOString();
+      await sql`
+        INSERT INTO sync_status (id, last_attempted_sync, record_count)
+        VALUES (1, ${now}, 0)
+        ON CONFLICT (id) DO UPDATE SET
+          last_attempted_sync = EXCLUDED.last_attempted_sync
+      `;
+
+      const result = await db.query<{ id: string }>(
+        `INSERT INTO sync_history (synced_at, status, success, record_count, error)
+         VALUES ($1, 'running', NULL, NULL, NULL)
+         RETURNING id::text AS id`,
+        [now]
+      );
+      const id = result.rows[0]?.id;
+      return id != null ? Number(id) : null;
+    },
+
+    /**
+     * Finalise the attempt in place. One attempt yields one row: no start marker
+     * is left behind, so a `success = false` row in `sync_history` is always a
+     * real failure and always carries an error message.
+     */
+    async completeSyncAttempt(
+      attemptId: number | null,
+      success: boolean,
+      error?: string,
+      count?: number
+    ): Promise<void> {
       const now = new Date().toISOString();
       if (success) {
         await sql`
@@ -418,11 +454,26 @@ export function createModelRepository(): ModelRepository {
             last_error = EXCLUDED.last_error
         `;
       }
-      // Append an immutable record to the history log
+
+      const status = success ? 'success' : 'failure';
+      const recordCount = success ? (count ?? 0) : null;
+
+      if (attemptId != null) {
+        const updated = await db.query(
+          `UPDATE sync_history
+             SET status = $2, success = $3, record_count = $4, error = $5, finished_at = $6
+           WHERE id = $1 AND status = 'running'`,
+          [attemptId, status, success, recordCount, error ?? null, now]
+        );
+        if ((updated.rowCount ?? 0) > 0) return;
+        // Row missing or already finalised (e.g. a retry after a partial write):
+        // fall through and append the outcome rather than losing it.
+      }
+
       await db.query(
-        `INSERT INTO sync_history (synced_at, success, record_count, error)
-         VALUES ($1, $2, $3, $4)`,
-        [now, success, success ? (count ?? 0) : null, error ?? null]
+        `INSERT INTO sync_history (synced_at, status, success, record_count, error, finished_at)
+         VALUES ($1, $2, $3, $4, $5, $1)`,
+        [now, status, success, recordCount, error ?? null]
       );
     },
 

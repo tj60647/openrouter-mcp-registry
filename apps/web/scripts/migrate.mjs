@@ -151,16 +151,51 @@ async function migrate() {
     ON CONFLICT (id) DO NOTHING
   `;
 
-  // Append-only sync history log — one row per sync attempt
+  // Sync history log — one row per sync ATTEMPT, opened as 'running' when the
+  // attempt starts and updated in place when it finishes. `success` is NULL
+  // while running, so a `success = FALSE` row is always a genuine failure.
   await sql`
     CREATE TABLE IF NOT EXISTS sync_history (
       id BIGSERIAL PRIMARY KEY,
       synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      success BOOLEAN NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      success BOOLEAN,
       record_count INTEGER,
-      error TEXT
+      error TEXT,
+      finished_at TIMESTAMPTZ
     )
   `;
+
+  // Idempotent upgrade for deployments created before the lifecycle columns.
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS status TEXT`;
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE sync_history ALTER COLUMN success DROP NOT NULL`;
+
+  // Backfill in three passes, most specific first. The middle pass is the one
+  // that matters: rows with success = FALSE, no error and no record count are
+  // the start markers the old two-row writer emitted before every sync. They
+  // were never real failures, so they become 'running' (an attempt that was
+  // opened and never finalised) rather than being counted as outages.
+  await sql`
+    UPDATE sync_history
+    SET status = 'success', finished_at = COALESCE(finished_at, synced_at)
+    WHERE status IS NULL AND success = TRUE
+  `;
+
+  await sql`
+    UPDATE sync_history
+    SET status = 'running', success = NULL, finished_at = NULL
+    WHERE status IS NULL AND success = FALSE AND error IS NULL AND record_count IS NULL
+  `;
+
+  await sql`
+    UPDATE sync_history
+    SET status = 'failure', finished_at = COALESCE(finished_at, synced_at)
+    WHERE status IS NULL
+  `;
+
+  await sql`ALTER TABLE sync_history ALTER COLUMN status SET DEFAULT 'running'`;
+  await sql`ALTER TABLE sync_history ALTER COLUMN status SET NOT NULL`;
 
   await sql`
     CREATE INDEX IF NOT EXISTS sync_history_synced_at_idx ON sync_history(synced_at DESC)

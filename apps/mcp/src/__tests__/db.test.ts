@@ -36,6 +36,7 @@ import {
   getSyncHistory,
   findModelsByCriteria,
   getModelsCount,
+  createModelRepository,
 } from '../lib/db';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -79,9 +80,11 @@ function makeSyncHistoryRow(overrides: Partial<SyncHistoryRow> = {}): SyncHistor
   return {
     id: 1,
     synced_at: new Date('2024-06-01T12:00:00Z'),
+    status: 'success',
     success: true,
     record_count: 42,
     error: null,
+    finished_at: new Date('2024-06-01T12:00:02Z'),
     ...overrides,
   };
 }
@@ -326,14 +329,29 @@ describe('getSyncHistory', () => {
   });
 
   it('returns transformed history entries', async () => {
-    const row = makeSyncHistoryRow({ id: 5, success: false, error: 'timeout', record_count: null });
+    const row = makeSyncHistoryRow({
+      id: 5,
+      status: 'failure',
+      success: false,
+      error: 'timeout',
+      record_count: null,
+    });
     mockQuery.mockResolvedValueOnce({ rows: [row] });
     const history = await getSyncHistory();
     expect(history).toHaveLength(1);
     expect(history[0]?.id).toBe(5);
+    expect(history[0]?.status).toBe('failure');
     expect(history[0]?.success).toBe(false);
     expect(history[0]?.error).toBe('timeout');
     expect(history[0]?.recordCount).toBeNull();
+  });
+
+  it('selects the lifecycle columns so running rows can be told apart', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getSyncHistory();
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('status');
+    expect(sql).toContain('finished_at');
   });
 
   it('passes the default limit of 50 when called with no argument', async () => {
@@ -402,5 +420,110 @@ describe('findModelsByCriteria', () => {
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('ORDER BY input_price_per_1k ASC');
     expect(sql).toContain('NULLS LAST');
+  });
+});
+
+// ── Sync attempt lifecycle ────────────────────────────────────────────────────
+// Regression guard for the phantom-failure-row bug: opening an attempt used to
+// append a (success = false, record_count = NULL, error = NULL) row that was
+// indistinguishable from a real outage, and the outcome was appended as a
+// second row. One attempt must now produce exactly one row.
+
+describe('createModelRepository sync attempt lifecycle', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockSql.mockReset();
+    mockSql.mockResolvedValue({ rows: [] });
+  });
+
+  it('opens the attempt as running with no success verdict', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: '7' }] });
+
+    const id = await createModelRepository().beginSyncAttempt();
+
+    expect(id).toBe(7);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('INSERT INTO sync_history');
+    expect(sql).toContain("'running'");
+    // The defect in one assertion: opening an attempt must not write a verdict.
+    expect(sql).not.toMatch(/VALUES\s*\(\$1,\s*'running',\s*(TRUE|FALSE|\$)/i);
+    expect(params).not.toContain(false);
+  });
+
+  it('does not blank the previous run\'s error when opening an attempt', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: '1' }] });
+
+    await createModelRepository().beginSyncAttempt();
+
+    const statusSql = (mockSql.mock.calls[0]?.[0] as string[]).join('');
+    expect(statusSql).toContain('last_attempted_sync');
+    expect(statusSql).not.toContain('last_error');
+  });
+
+  it('updates the opened row in place on success instead of appending', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await createModelRepository().completeSyncAttempt(7, true, undefined, 367);
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('UPDATE sync_history');
+    expect(sql).not.toContain('INSERT INTO sync_history');
+    expect(params).toEqual([7, 'success', true, 367, null, expect.any(String)]);
+  });
+
+  it('updates the opened row in place on failure instead of appending', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await createModelRepository().completeSyncAttempt(7, false, 'network error');
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('UPDATE sync_history');
+    expect(params).toEqual([7, 'failure', false, null, 'network error', expect.any(String)]);
+  });
+
+  it('only finalises a row that is still running', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+    await createModelRepository().completeSyncAttempt(7, true, undefined, 1);
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("status = 'running'");
+  });
+
+  it('appends a standalone outcome row when no attempt was opened', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    await createModelRepository().completeSyncAttempt(null, false, 'boom');
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('INSERT INTO sync_history');
+    expect(params).toEqual([expect.any(String), 'failure', false, null, 'boom']);
+  });
+
+  it('falls back to an append when the opened row can no longer be updated', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await createModelRepository().completeSyncAttempt(7, true, undefined, 12);
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    const [insertSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(insertSql).toContain('INSERT INTO sync_history');
+  });
+
+  it('writes one history row per attempt across a full success cycle', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: '9' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    const repo = createModelRepository();
+    const id = await repo.beginSyncAttempt();
+    await repo.completeSyncAttempt(id, true, undefined, 367);
+
+    const inserts = mockQuery.mock.calls.filter(([sql]) =>
+      (sql as string).includes('INSERT INTO sync_history')
+    );
+    expect(inserts).toHaveLength(1);
   });
 });

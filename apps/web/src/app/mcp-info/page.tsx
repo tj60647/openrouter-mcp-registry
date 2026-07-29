@@ -90,9 +90,9 @@ const TOOLS = [
       'History of sync attempts, most recent first, with success/failure, record count, and error text.',
     params: '{ limit?: number = 50 (1–200) }',
     returns:
-      '{ history: Array<{ id, syncedAt, success, recordCount, error }>, count: number }',
+      '{ history: Array<{ id, syncedAt, status, success, recordCount, error, finishedAt }>, count: number }',
     notes:
-      'Each sync writes TWO rows: a start marker (success: false, recordCount: null, error: null) written before OpenRouter is contacted, then the real outcome a moment later. A start marker with no error is not a failure.',
+      'One row per sync attempt. The row is opened as status "running" (success: null) before OpenRouter is contacted and updated in place when the attempt ends, so success: false always means a real failure and always carries an error. syncedAt is the start, finishedAt the end (null while running). A "running" row older than the newest finished row is an attempt whose process died mid-sync.',
   },
 ] as const;
 
@@ -1274,10 +1274,12 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
             secret and redeploy.
           </li>
           <li>
-            A sync writes two <code>get_sync_history</code> rows: a start marker before OpenRouter
-            is contacted (<code>success: false</code>, <code>recordCount: null</code>,{' '}
-            <code>error: null</code>) and the real outcome immediately after. Only the second row
-            reflects whether the sync worked.
+            A sync writes one <code>get_sync_history</code> row. It is opened as{' '}
+            <code>status: &quot;running&quot;</code> (<code>success: null</code>) before OpenRouter
+            is contacted and updated in place when the attempt ends, so a{' '}
+            <code>success: false</code> row is always a genuine failure and always carries an{' '}
+            <code>error</code>. Rows written before this fix show as <code>running</code> when they
+            were start markers.
           </li>
           <li>
             After a successful sync, embeddings are generated for any models that gained a

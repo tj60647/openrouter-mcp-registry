@@ -315,7 +315,9 @@ pnpm db:seed
 
 `apps/mcp/vercel.json` configures a daily cron at `0 0 * * *` (midnight UTC) that calls `/api/cron/sync`. When `CRON_SECRET` is set on the project, Vercel sends it to the cron invocation as a Bearer token. The same route can be triggered on demand with `curl -sS <mcp-host>/api/cron/sync -H "Authorization: Bearer $CRON_SECRET"` (a `GET`), or from the admin panel's **Sync** action.
 
-Each sync writes **two** `sync_history` rows: a start marker (`success: false`, `record_count: null`, `error: null`) written before OpenRouter is contacted, then the real outcome. Only the second row reflects whether the sync worked — `get_sync_history` shows both.
+Each sync writes **one** `sync_history` row. It is opened with `status = 'running'` (`success: null`) before OpenRouter is contacted and updated in place when the attempt ends, so a `success: false` row is always a genuine failure and always carries an `error`. `synced_at` is the attempt's start and `finished_at` its end (`null` while running); a `running` row older than the newest finished row is an attempt whose process died mid-sync.
+
+Rows written before this lifecycle existed are backfilled by `pnpm db:migrate`: old start markers become `running` rather than being counted as outages.
 
 > **Note:** You must set `CRON_SECRET` yourself — Vercel does **not** create it automatically (the Neon integration does not provide it). In production the cron route returns `503` ("Cron auth not configured") when the secret is missing and `NODE_ENV=production`, so the job fails on every run until you set it. Generate one with `openssl rand -hex 32`, add it to the project's Production environment, and redeploy so the new deployment picks it up.
 

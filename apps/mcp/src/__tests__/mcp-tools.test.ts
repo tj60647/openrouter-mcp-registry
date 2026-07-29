@@ -127,9 +127,11 @@ function makeSyncHistoryEntry(overrides: Partial<SyncHistoryEntry> = {}): SyncHi
   return {
     id: 1,
     syncedAt: new Date('2024-06-01T12:00:00Z'),
+    status: 'success',
     success: true,
     recordCount: 42,
     error: null,
+    finishedAt: new Date('2024-06-01T12:00:02Z'),
     ...overrides,
   };
 }

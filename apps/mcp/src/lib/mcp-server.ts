@@ -505,7 +505,7 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: get_sync_history
   server.tool(
     'get_sync_history',
-    'Get the history of sync attempts (most recent first). Each entry records whether the sync succeeded, how many models were synced, and any error message.',
+    'Get the history of sync attempts (most recent first). One row per attempt. status is "running" (started, not yet finished — success is null), "success", or "failure"; a failure always carries an error message. syncedAt is when the attempt started and finishedAt when it ended (null while running). A "running" row older than the newest finished row is an attempt whose process died mid-sync.',
     {
       limit: z
         .number()
