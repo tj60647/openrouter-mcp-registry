@@ -186,6 +186,31 @@ async function migrate() {
   await sql`ALTER TABLE sync_history ALTER COLUMN status DROP DEFAULT`;
   await sql`ALTER TABLE sync_history ALTER COLUMN status DROP NOT NULL`;
 
+  // Snapshot before anything below touches a row.
+  //
+  // The passes that follow include the one destructive statement in this file.
+  // The rows it removes are write artefacts of the defect this release fixes and
+  // carry nothing their surviving partner does not, but "irreversible" is a poor
+  // property for a migration people run casually, and this table is small enough
+  // that insurance is free.
+  //
+  // IF NOT EXISTS is load-bearing: on a re-run it must preserve the ORIGINAL
+  // snapshot rather than overwrite it with already-migrated data. To restore:
+  //   DELETE FROM sync_history;
+  //   INSERT INTO sync_history SELECT * FROM sync_history_pre_lifecycle_backup;
+  // Drop the backup table once you are satisfied with the migrated history.
+  const legacy = await sql`SELECT COUNT(*)::int AS n FROM sync_history WHERE status IS NULL`;
+  const legacyRowCount = legacy.rows[0]?.n ?? 0;
+  if (legacyRowCount > 0) {
+    await sql`
+      CREATE TABLE IF NOT EXISTS sync_history_pre_lifecycle_backup AS
+      SELECT * FROM sync_history
+    `;
+    console.log(
+      `  sync_history: ${legacyRowCount} pre-lifecycle rows; snapshot in sync_history_pre_lifecycle_backup`
+    );
+  }
+
   // Repair for databases migrated by an earlier revision of this script, which
   // left status defaulting to 'running' and NOT NULL. Rows an older build
   // inserted after that migration took the default, so they carry
@@ -217,8 +242,9 @@ async function migrate() {
   //
   // This is the one destructive statement in the file. It is deliberate: these
   // rows exist only because of the defect fixed in this release, and no
-  // consumer reads them (`get_sync_history` is the sole reader of this table).
-  await sql`
+  // consumer reads them (`get_sync_history` is the sole reader of this table),
+  // and the snapshot above makes it reversible.
+  const removed = await sql`
     DELETE FROM sync_history marker
     WHERE marker.status IS NULL
       AND marker.success = FALSE
@@ -233,6 +259,9 @@ async function migrate() {
           AND outcome.synced_at <= marker.synced_at + INTERVAL '10 minutes'
       )
   `;
+  if (removed.rowCount > 0) {
+    console.log(`  sync_history: removed ${removed.rowCount} paired start markers left by the old writer`);
+  }
 
   // Backfill in three passes, most specific first. The middle pass now catches
   // only UNPAIRED start markers — attempts the old code opened and never

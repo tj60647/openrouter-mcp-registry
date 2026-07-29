@@ -93,7 +93,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `POST` | `/api/resolve`           | Resolve model ID → canonical model                              |
 | `GET`  | `/api/health`            | Health check + sync status summary. `200` when healthy, `503` when the registry is unreachable |
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
-| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured). Rate limited per username: 10 attempts / 15 min, `429` beyond that |
+| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured). Rate limited 10 attempts / 15 min per username *and* source address — per-username alone would let anyone lock an admin out — `429` beyond that |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
 | `GET`  | `/api/admin/clients`     | List registered OAuth clients (requires `ADMIN_SECRET`)         |
 | `POST` | `/api/admin/clients/revoke` | Revoke or restore an OAuth client (requires `ADMIN_SECRET`)  |
@@ -304,6 +304,17 @@ In **Settings → Environment Variables**:
 > | `rate_limits` table | Rate limiting is **disabled** and every check logs `rate_limits table is missing` at error level. This one deliberately fails *open*: failing closed would 429 every OAuth endpoint and every MCP tool call at once, and a forgotten manual migration should not be a total outage. Grep your logs for that message after any deploy. |
 > | `sync_history.status` / `finished_at` / `partial` | `get_sync_history` errors, and `/api/cron/sync` fails while opening its attempt. The catalogue is not modified, so nothing is corrupted — the sync simply does not run until you migrate. |
 > | `oauth_clients.registration_access_token_hash` | `POST /api/oauth/register` fails. Rows predating the column get `NULL` and cannot use the RFC 7592 management endpoint (always `401` there); the admin panel's revoke action still covers them. |
+>
+> **The migration removes rows, once.** Before the lifecycle existed, every sync wrote *two* `sync_history` rows: a start marker, then the real outcome. Under the one-row-per-attempt model those markers are duplicates, and leaving them would make `get_sync_history` report roughly half of all historical syncs as attempts that died mid-run — the opposite of the truth, and contrary to what the tool's own description tells an agent. The migration deletes a marker only when a completed row follows it within ten minutes; an unpaired marker is kept and correctly reported as `running`.
+>
+> It snapshots the table into `sync_history_pre_lifecycle_backup` first (created once, never overwritten on a re-run) and prints how many rows it touched. To undo:
+>
+> ```sql
+> DELETE FROM sync_history;
+> INSERT INTO sync_history SELECT * FROM sync_history_pre_lifecycle_backup;
+> ```
+>
+> Drop that table once you are satisfied with the migrated history.
 
 After the first deploy, run migrations against your Neon database:
 
