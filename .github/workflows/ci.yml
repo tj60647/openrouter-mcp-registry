@@ -30,9 +30,12 @@ jobs:
       # pin lives in one place and CI cannot drift from local development.
       - uses: pnpm/action-setup@v4
 
+      # Must satisfy pnpm's own floor, not just the app's. pnpm 11 loads
+      # node:sqlite, which does not exist before Node 22.13 -- on Node 20 the
+      # runner dies at `pnpm store path` before installing anything.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       # --frozen-lockfile makes an out-of-date pnpm-lock.yaml a build failure
