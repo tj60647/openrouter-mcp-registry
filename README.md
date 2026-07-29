@@ -91,7 +91,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/models`            | List cached models (`?limit`, `?offset`, `?provider`, `?query`) |
 | `GET`  | `/api/models/:id`        | Get model by canonical ID                                       |
 | `POST` | `/api/resolve`           | Resolve model ID → canonical model                              |
-| `GET`  | `/api/health`            | Health check + sync status summary                              |
+| `GET`  | `/api/health`            | Health check + sync status summary. `200` when healthy, `503` when the registry is unreachable |
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
 | `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured) |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
@@ -116,7 +116,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/models`        | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`, `?sortDir`, `?toolsOnly`, `?reasoningOnly`, `?availableOnly`, `?retiredOnly`) |
 | `GET`  | `/api/providers`     | List distinct provider names                                                                                                                             |
 | `POST` | `/api/resolve`       | Resolve model ID → canonical model                                                                                                                       |
-| `GET`  | `/api/health`        | Health check                                                                                                                                             |
+| `GET`  | `/api/health`        | Health check. Proxies the MCP host and passes its status through; `503` when that host is unreachable                                                     |
 | `GET`  | `/api/chat`          | Agent config — default model, available models, and MCP tools list                                                                                       |
 | `POST` | `/api/chat`          | Chatbot proxy — browser posts here; server-side route delegates LLM + tool calls to `apps/mcp`                                                           |
 | `POST` | `/api/admin/login`   | Create a web-owned admin session after server-side credential verification by apps/mcp; issues session cookie                                                                                        |
