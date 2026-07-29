@@ -46,6 +46,9 @@ let lastPruneAt = 0;
  * database anyway, so a failure here means the request was going to fail
  * regardless — and failing open would drop brute-force protection at exactly
  * the moment the database is unhealthy.
+ *
+ * The single exception is a missing `rate_limits` table, which means migrations
+ * have not been run rather than that anything is wrong; see the catch below.
  */
 export async function checkRateLimit(
   key: string,
