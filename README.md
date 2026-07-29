@@ -487,7 +487,8 @@ curl -sS -X POST https://your-mcp-app.vercel.app/api/oauth/register \
 - Requesting `client_credentials` together with `redirect_uris` is rejected with `400 invalid_client_metadata` — a public client holds no secret, so honouring that grant would issue tokens to anyone who learns the `client_id`. Also rejected: an empty `grant_types` array, unsupported values, `refresh_token` without `authorization_code`, and `authorization_code`/`refresh_token` with no `redirect_uris`. Nothing is written to the database when a rule fires.
 - At the token endpoint, requesting a grant the client is not registered for returns `400 unauthorized_client`. Grants this server does not implement at all still return `400 unsupported_grant_type`.
 - Clients registered before `grant_types` was enforced keep working: a stored client that has a secret and no `redirect_uris` gets `client_credentials` added to its effective grant list on read. Public (secret-less) clients are deliberately **not** grandfathered.
-- Registration is rate-limited to 5 per 15 minutes per IP. Operators can require an initial access token with `OAUTH_REGISTRATION_ACCESS_TOKEN`, or disable registration entirely with `OAUTH_DISABLE_REGISTRATION=true`.
+- Registration is rate-limited to 5 per 15 minutes per IP, counted in Postgres so the limit holds across serverless instances. Operators can require an initial access token with `OAUTH_REGISTRATION_ACCESS_TOKEN`, or disable registration entirely with `OAUTH_DISABLE_REGISTRATION=true`.
+- Open registration is a deliberate choice, and the exposure it grants is bounded: the only grantable scope is `mcp:read`, every tool is read-only, and the tool path itself carries a per-client budget — 600 calls/minute overall and 60/minute for `semantic_search`, the one tool that spends money by embedding its query. Throttled calls return an MCP error result and never reach the database or OpenRouter.
 
 #### Managing a registration (RFC 7592)
 

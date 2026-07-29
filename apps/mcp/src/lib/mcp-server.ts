@@ -16,6 +16,7 @@ import {
 } from './db';
 import { generateEmbedding } from './embeddings';
 import { recordUsage } from './oauthStore';
+import { checkRateLimit } from './rateLimit';
 
 /** Fields dropped from list-style responses unless `verbose` is set — they dominate payload size. */
 const VERBOSE_ONLY_FIELDS = ['description', 'metadata'] as const;
@@ -108,9 +109,29 @@ function fieldsArg() {
 }
 
 /**
- * Wrap `server.tool` so every tool call records a usage row attributed to the
- * calling OAuth client (from the request's authInfo). Best-effort: a failed
- * usage write never affects the tool response. Applied before any tool is
+ * Per-client budgets for the tool path.
+ *
+ * Dynamic client registration is deliberately open (the catalogue is public,
+ * read-only data and interactive MCP clients bootstrap through it), and the
+ * limiters on /api/oauth/* throttle *acquiring* a token. Nothing throttled
+ * *using* one, so a self-registered client could call tools without bound.
+ *
+ * The general budget is deliberately generous — this is a read-only registry
+ * and a legitimate agent may page through the catalogue. semantic_search gets a
+ * tighter one because it is the only tool that makes a paid outbound call,
+ * embedding the query on every invocation.
+ */
+const TOOL_RATE_LIMIT = { limit: 600, windowMs: 60_000 };
+const SEMANTIC_SEARCH_RATE_LIMIT = { limit: 60, windowMs: 60_000 };
+
+/** Tools whose cost is not bounded by the registry alone. */
+const PAID_TOOLS = new Set(['semantic_search']);
+
+/**
+ * Wrap `server.tool` so every tool call is (a) charged against the calling
+ * OAuth client's budget and (b) recorded as a usage row attributed to that
+ * client (both from the request's authInfo). Usage logging is best-effort: a
+ * failed write never affects the tool response. Applied before any tool is
  * registered so all registrations are instrumented.
  */
 function instrumentUsage(server: McpServer): void {
@@ -126,6 +147,24 @@ function instrumentUsage(server: McpServer): void {
           (extra as { authInfo?: { clientId?: string } } | undefined)?.authInfo?.clientId ?? 'unknown';
         let ok = true;
         try {
+          const paid = PAID_TOOLS.has(name);
+          const allowed = await checkRateLimit(
+            paid ? `mcp:tool:${name}:${clientId}` : `mcp:tool:${clientId}`,
+            paid ? SEMANTIC_SEARCH_RATE_LIMIT : TOOL_RATE_LIMIT
+          );
+          if (!allowed) {
+            ok = false;
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Error: rate limit exceeded for ${name}. Retry in under a minute.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
           const result = await inner(a, extra);
           ok = !result?.isError;
           return result;

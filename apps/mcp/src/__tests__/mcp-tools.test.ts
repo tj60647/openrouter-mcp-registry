@@ -8,15 +8,21 @@
  * License: MIT
  */
 
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import type { Model, SyncStatus, SyncHistoryEntry } from '@openrouter-mcp/shared';
 
 // ── Hoisted shared state (captured tool handlers) ─────────────────────────────
 // vi.hoisted runs before module-level code, so the factory can reference this
 // variable safely even though vi.mock calls are hoisted above imports.
 
+// `extra` carries the request's authInfo, which the usage/rate-limit wrapper
+// reads to attribute a call to an OAuth client.
 const toolHandlers = vi.hoisted(
-  () => ({} as Record<string, (args: Record<string, unknown>) => Promise<ToolResult>>)
+  () =>
+    ({} as Record<
+      string,
+      (args: Record<string, unknown>, extra?: { authInfo?: { clientId?: string } }) => Promise<ToolResult>
+    >)
 );
 
 type ContentItem = { type: string; text: string };
@@ -85,6 +91,18 @@ vi.mock('../lib/embeddings', () => ({
 
 vi.mock('../lib/oauthStore', () => ({
   recordUsage: vi.fn().mockResolvedValue(undefined),
+}));
+
+// ── Mock the rate limiter ─────────────────────────────────────────────────────
+// initMcpServer charges every tool call against the calling client's budget.
+// The limiter is Postgres-backed and this suite does not mock @vercel/postgres,
+// so leaving it real would fail closed and deny every call. Its own behaviour is
+// covered in rateLimit.test.ts.
+
+const mockCheckRateLimit = vi.hoisted(() => vi.fn(async () => true));
+
+vi.mock('../lib/rateLimit', () => ({
+  checkRateLimit: (...args: unknown[]) => mockCheckRateLimit(...(args as [])),
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -673,5 +691,89 @@ describe('camelCase sortBy (P6)', () => {
     await toolHandlers['list_models']!({ limit: 10, offset: 0, sortBy: 'created_at' });
 
     expect(mockGetModels).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'created_at' }));
+  });
+});
+
+// ── Per-client tool budget ────────────────────────────────────────────────────
+// Dynamic client registration is deliberately open, so the brake that matters
+// is on USING a token, not acquiring one. Before this existed, /api/mcp had no
+// rate limiting at all and a self-registered client could call tools unbounded.
+
+describe('per-client tool rate limiting', () => {
+  beforeEach(() => {
+    mockCheckRateLimit.mockReset();
+    mockCheckRateLimit.mockResolvedValue(true);
+    // These assert "was not called", so earlier suites' calls must not count.
+    mockGetModels.mockClear();
+    mockGenerateEmbedding.mockClear();
+  });
+
+  it('charges every tool call against the calling client', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['list_models']!({ offset: 0 });
+
+    expect(mockCheckRateLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an error result instead of running the tool when the budget is spent', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+    mockGetModels.mockResolvedValueOnce([makeModel()]);
+
+    const result = await toolHandlers['list_models']!({ offset: 0 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('rate limit exceeded');
+    // The negative half: the handler must not have reached the database.
+    expect(mockGetModels).not.toHaveBeenCalled();
+  });
+
+  it('gives semantic_search its own tighter budget', async () => {
+    mockGenerateEmbedding.mockResolvedValueOnce([0.1, 0.2, 0.3]);
+    mockSemanticSearchModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['semantic_search']!({ query: 'fast cheap model', limit: 10, offset: 0 });
+
+    const [key, opts] = mockCheckRateLimit.mock.calls[0] as unknown as [
+      string,
+      { limit: number; windowMs: number },
+    ];
+    expect(key).toContain('semantic_search');
+    expect(opts.limit).toBeLessThan(600);
+  });
+
+  it('does not spend an embedding call when semantic_search is throttled', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce(false);
+
+    const result = await toolHandlers['semantic_search']!({
+      query: 'fast cheap model',
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(result.isError).toBe(true);
+    // semantic_search is the only tool that spends money. Throttling it must
+    // happen before the paid outbound embedding request, not after.
+    expect(mockGenerateEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('keys the budget on the OAuth client id', async () => {
+    mockGetModels.mockResolvedValueOnce([]);
+
+    await toolHandlers['list_models']!({ offset: 0 }, { authInfo: { clientId: 'client-abc' } });
+
+    const [key] = mockCheckRateLimit.mock.calls[0] as unknown as [string];
+    expect(key).toContain('client-abc');
+  });
+
+  it('does not let one client spend another client budget', async () => {
+    mockGetModels.mockResolvedValue([]);
+
+    await toolHandlers['list_models']!({ offset: 0 }, { authInfo: { clientId: 'client-a' } });
+    await toolHandlers['list_models']!({ offset: 0 }, { authInfo: { clientId: 'client-b' } });
+
+    const [keyA] = mockCheckRateLimit.mock.calls[0] as unknown as [string];
+    const [keyB] = mockCheckRateLimit.mock.calls[1] as unknown as [string];
+    expect(keyA).not.toBe(keyB);
   });
 });
