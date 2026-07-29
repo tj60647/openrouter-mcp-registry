@@ -1,10 +1,19 @@
 /**
- * Lightweight sliding-window rate limiter backed by a per-process in-memory map.
+ * Fixed-window rate limiter backed by a per-process in-memory map.
  *
- * On serverless (Vercel) each function instance has its own memory space, so
- * limits are enforced per-instance rather than globally. This is intentional:
- * it still provides meaningful protection against obvious per-client abuse
- * without requiring a shared store.
+ * This is a first-pass brake, NOT the durable limit. On serverless each
+ * function instance has its own memory, so a limit here is per warm lambda and
+ * empty after a cold start. It is worth keeping because it rejects obvious
+ * floods without a round trip, but it must not be relied on alone.
+ *
+ * apps/web keeps the in-memory version deliberately: it has no runtime database
+ * access by design (see "MCP-owned backend env boundary" in the README, and the
+ * test asserting apps/web does not require POSTGRES_URL), so it cannot share a
+ * Postgres counter the way apps/mcp does. Both surfaces limited here proxy to
+ * apps/mcp, and that is where the durable, cross-instance limit is enforced:
+ *
+ * - /api/admin/login  -> apps/mcp /api/admin/verify-login, limited per username
+ * - /api/chat         -> apps/mcp /api/chat
  *
  * Old entries are pruned lazily whenever the map grows beyond PRUNE_THRESHOLD
  * to avoid unbounded memory growth.

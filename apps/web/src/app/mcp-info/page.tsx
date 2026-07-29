@@ -90,9 +90,9 @@ const TOOLS = [
       'History of sync attempts, most recent first, with success/failure, record count, and error text.',
     params: '{ limit?: number = 50 (1–200) }',
     returns:
-      '{ history: Array<{ id, syncedAt, success, recordCount, error }>, count: number }',
+      '{ history: Array<{ id, syncedAt, status, success, recordCount, error, finishedAt, partial }>, count: number }',
     notes:
-      'Each sync writes TWO rows: a start marker (success: false, recordCount: null, error: null) written before OpenRouter is contacted, then the real outcome a moment later. A start marker with no error is not a failure.',
+      'One row per sync attempt. The row is opened as status "running" (success: null) before OpenRouter is contacted and updated in place when the attempt ends, so success: false always means a real failure and always carries an error. syncedAt is the start, finishedAt the end (null while running). A "running" row older than the newest finished row is an attempt whose process died mid-sync.',
   },
 ] as const;
 
@@ -795,14 +795,21 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
           production table found zero rows in either inconsistent combination.
         </p>
         <p style={MUTED}>
-          <strong style={{ color: 'var(--text)' }}>One known gap.</strong> The retirement sweep runs
-          per provider, and only over the providers present in the current sync. If an{' '}
-          <em>entire provider</em> disappears from OpenRouter&apos;s catalogue, the sweep never
-          visits it, so its models stay <code>isAvailable: true</code> with{' '}
-          <code>retiredAt: null</code> indefinitely. This is the reason{' '}
-          <code>availableCount</code> can exceed <code>recordCount</code>. You can spot these rows
-          yourself: their <code>lastSeenAt</code> is older than the newest{' '}
-          <code>lastSeenAt</code> in the catalogue.
+          <strong style={{ color: 'var(--text)' }}>Whole-provider disappearances are covered.</strong>{' '}
+          The sweep is a single global <code>UPDATE</code> over every row the current sync did not
+          touch, so a provider vanishing from OpenRouter&apos;s catalogue entirely is retired like
+          any other absence. It used to run per provider, over only the providers present in the
+          response — which by construction could never see a provider that had gone.
+        </p>
+        <p style={MUTED}>
+          <strong style={{ color: 'var(--text)' }}>Guarded by volume, not by partitioning.</strong>{' '}
+          A global sweep makes a truncated upstream response dangerous, so if a sync fetches fewer
+          than 80% of the models currently marked available, the sweep is skipped and the run is
+          recorded with <code>partial: true</code> in <code>get_sync_history</code>. The catalogue
+          still updates; only retirement waits for a sync that looks whole. Deferring retirement by
+          a day is recoverable — retiring most of the catalogue on one bad response is not. A run
+          of consecutive <code>partial</code> entries means retirement data is going stale and
+          upstream should be checked.
         </p>
         <p style={{ ...SMALL_MUTED, marginBottom: 0 }}>
           Historical footnote: a small number of rows were retired before the{' '}
@@ -884,9 +891,12 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
             <code>fields</code> (string array, no default) — explicit projection using camelCase{' '}
             <code>Model</code> field names. It{' '}
             <strong style={{ color: 'var(--text)' }}>wins over verbose</strong>. <code>id</code> is
-            always included and comes first; the rest appear in the order you list them; unknown
-            names are silently ignored rather than raising an error. An empty array is treated as
-            not supplied.
+            always included and comes first; the rest appear in the order you list them. Only the
+            names in the Model field table above are accepted — an unrecognised one is a{' '}
+            <strong style={{ color: 'var(--text)' }}>validation error</strong>, not a silently
+            missing field, so a typo cannot be mistaken for absent data. Note that{' '}
+            <code>fields</code> takes camelCase only, unlike <code>sortBy</code>, which accepts
+            both spellings. An empty array is treated as not supplied.
           </li>
         </ul>
         <pre>
@@ -1274,10 +1284,12 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
             secret and redeploy.
           </li>
           <li>
-            A sync writes two <code>get_sync_history</code> rows: a start marker before OpenRouter
-            is contacted (<code>success: false</code>, <code>recordCount: null</code>,{' '}
-            <code>error: null</code>) and the real outcome immediately after. Only the second row
-            reflects whether the sync worked.
+            A sync writes one <code>get_sync_history</code> row. It is opened as{' '}
+            <code>status: &quot;running&quot;</code> (<code>success: null</code>) before OpenRouter
+            is contacted and updated in place when the attempt ends, so a{' '}
+            <code>success: false</code> row is always a genuine failure and always carries an{' '}
+            <code>error</code>. Rows written before this fix show as <code>running</code> when they
+            were start markers.
           </li>
           <li>
             After a successful sync, embeddings are generated for any models that gained a

@@ -1,7 +1,22 @@
 import { sql, db } from '@vercel/postgres';
 import type { Model, ModelRow, SyncStatus, SyncStatusRow, SyncHistoryEntry, SyncHistoryRow } from '@openrouter-mcp/shared';
 import { rowToModel, rowToSyncStatus, rowToSyncHistoryEntry } from '@openrouter-mcp/shared';
-import type { ModelRepository } from '@openrouter-mcp/shared';
+import type { ModelRepository, UpsertOutcome, SyncAttemptOutcome } from '@openrouter-mcp/shared';
+
+/**
+ * Minimum share of the previous sync's model count an upstream response must
+ * contain before the retirement sweep is allowed to run.
+ *
+ * OpenRouter's catalogue moves by a handful of models a day, so a response
+ * holding under 80% of the last one is far more likely to be a truncated or
+ * degraded fetch than a real mass retirement.
+ *
+ * Because the baseline follows the fetched count rather than the stored one,
+ * this is self-correcting: a one-off dip skips a single sweep, and a shrink
+ * that is actually real is accepted on the next sync, when it is no longer a
+ * dip relative to the run before it.
+ */
+const SWEEP_MIN_COVERAGE = 0.8;
 
 // Whitelist of allowed sort columns mapped to their SQL column names.
 // Supports PaginationSchema aliases (newest, context, input_price, output_price),
@@ -202,7 +217,7 @@ export async function getSyncStatus(): Promise<SyncStatus | null> {
 
 export async function getSyncHistory(limit = 50): Promise<SyncHistoryEntry[]> {
   const result = await db.query<SyncHistoryRow>(
-    `SELECT id, synced_at, success, record_count, error
+    `SELECT id, synced_at, status, success, record_count, error, finished_at, partial
      FROM sync_history
      ORDER BY synced_at DESC
      LIMIT $1`,
@@ -310,9 +325,8 @@ export async function getToolCapableModels(limit = 20): Promise<Model[]> {
 
 export function createModelRepository(): ModelRepository {
   return {
-    async upsertModels(models: Model[]): Promise<void> {
+    async upsertModels(models: Model[]): Promise<UpsertOutcome> {
       const syncStartedAt = models[0]?.fetchedAt ?? new Date();
-      const providers = Array.from(new Set(models.map((m) => m.provider).filter(Boolean)));
 
       // Uses individual upserts within a transaction to maintain atomicity.
       // client.query with positional parameters is required here because the @vercel/postgres
@@ -323,6 +337,22 @@ export function createModelRepository(): ModelRepository {
       const client = await db.connect();
       try {
         await client.query('BEGIN');
+
+        // Baseline for the volume guard: how many models the LAST sync fetched,
+        // not how many rows are currently flagged available.
+        //
+        // Those two numbers are not interchangeable. The count of available rows
+        // is inflated by exactly the backlog this sweep exists to clear, so
+        // using it would compare a good fetch against a number the sweep itself
+        // is supposed to bring down — and since only the sweep lowers it, one
+        // skip would latch the guard on forever. record_count tracks the
+        // upstream catalogue, so a one-off truncation trips the guard while a
+        // genuine sustained shrink is accepted on the following sync.
+        const baselineResult = await client.query<{ record_count: string }>(
+          `SELECT record_count::text AS record_count FROM sync_status WHERE id = 1`
+        );
+        const lastFetchedCount = Number(baselineResult.rows[0]?.record_count ?? 0);
+
         for (const model of models) {
           await client.query(
             `INSERT INTO models (
@@ -376,19 +406,37 @@ export function createModelRepository(): ModelRepository {
           );
         }
 
-        // Mark models no longer returned by OpenRouter as unavailable
-        for (const provider of providers) {
-          await client.query(
+        // Retirement sweep. One global UPDATE over every row this sync did not
+        // touch, NOT a loop over the providers present in the response: a
+        // per-provider sweep can only ever see providers that are still there,
+        // so an entire provider vanishing from the catalogue -- precisely the
+        // case retirement exists to catch -- was never swept and its models
+        // stayed available forever.
+        //
+        // Guarded by volume rather than by partitioning. A truncated upstream
+        // response would now mass-retire everything missing, so if the fetch
+        // came back materially smaller than what we already hold, the sweep is
+        // skipped and the run is reported partial. Deferring retirement by a
+        // day is recoverable; retiring most of the catalogue on one bad
+        // response is not.
+        const sweepSkipped =
+          lastFetchedCount > 0 && models.length < lastFetchedCount * SWEEP_MIN_COVERAGE;
+
+        let retired = 0;
+        if (!sweepSkipped) {
+          const result = await client.query(
             `UPDATE models
              SET is_available = FALSE,
-                 retired_at = COALESCE(retired_at, $2::timestamptz)
-             WHERE provider = $1::text
-               AND fetched_at < $2::timestamptz`,
-            [provider, syncStartedAt.toISOString()]
+                 retired_at = COALESCE(retired_at, $1::timestamptz)
+             WHERE fetched_at < $1::timestamptz
+               AND is_available = TRUE`,
+            [syncStartedAt.toISOString()]
           );
+          retired = result.rowCount ?? 0;
         }
 
         await client.query('COMMIT');
+        return { retired, sweepSkipped };
       } catch (err) {
         await client.query('ROLLBACK');
         throw err;
@@ -397,7 +445,41 @@ export function createModelRepository(): ModelRepository {
       }
     },
 
-    async recordSyncAttempt(success: boolean, error?: string, count?: number): Promise<void> {
+    /**
+     * Open a `running` history row and stamp `sync_status.last_attempted_sync`.
+     *
+     * `last_error` is deliberately left alone: it describes the last *completed*
+     * attempt, so blanking it here would make the dashboard show "no errors"
+     * for as long as a sync is in flight, even when the previous run failed.
+     */
+    async beginSyncAttempt(): Promise<number | null> {
+      const now = new Date().toISOString();
+      await sql`
+        INSERT INTO sync_status (id, last_attempted_sync, record_count)
+        VALUES (1, ${now}, 0)
+        ON CONFLICT (id) DO UPDATE SET
+          last_attempted_sync = EXCLUDED.last_attempted_sync
+      `;
+
+      const result = await db.query<{ id: string }>(
+        `INSERT INTO sync_history (synced_at, status, success, record_count, error)
+         VALUES ($1, 'running', NULL, NULL, NULL)
+         RETURNING id::text AS id`,
+        [now]
+      );
+      const id = result.rows[0]?.id;
+      return id != null ? Number(id) : null;
+    },
+
+    /**
+     * Finalise the attempt in place. One attempt yields one row: no start marker
+     * is left behind, so a `success = false` row in `sync_history` is always a
+     * real failure and always carries an error message.
+     */
+    async completeSyncAttempt(
+      attemptId: number | null,
+      { success, error, count, partial = false }: SyncAttemptOutcome
+    ): Promise<void> {
       const now = new Date().toISOString();
       if (success) {
         await sql`
@@ -418,11 +500,27 @@ export function createModelRepository(): ModelRepository {
             last_error = EXCLUDED.last_error
         `;
       }
-      // Append an immutable record to the history log
+
+      const status = success ? 'success' : 'failure';
+      const recordCount = success ? (count ?? 0) : null;
+
+      if (attemptId != null) {
+        const updated = await db.query(
+          `UPDATE sync_history
+             SET status = $2, success = $3, record_count = $4, error = $5,
+                 finished_at = $6, partial = $7
+           WHERE id = $1 AND status = 'running'`,
+          [attemptId, status, success, recordCount, error ?? null, now, partial]
+        );
+        if ((updated.rowCount ?? 0) > 0) return;
+        // Row missing or already finalised (e.g. a retry after a partial write):
+        // fall through and append the outcome rather than losing it.
+      }
+
       await db.query(
-        `INSERT INTO sync_history (synced_at, success, record_count, error)
-         VALUES ($1, $2, $3, $4)`,
-        [now, success, success ? (count ?? 0) : null, error ?? null]
+        `INSERT INTO sync_history (synced_at, status, success, record_count, error, finished_at, partial)
+         VALUES ($1, $2, $3, $4, $5, $1, $6)`,
+        [now, status, success, recordCount, error ?? null, partial]
       );
     },
 

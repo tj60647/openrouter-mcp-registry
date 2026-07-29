@@ -18,9 +18,15 @@ export default function SyncStatusPage() {
     setError(null);
     try {
       const res = await fetch('/api/health');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json() as { syncStatus: SyncStatus | null };
-      setData({ status: json.syncStatus });
+      const json = (await res.json().catch(() => null)) as {
+        syncStatus?: SyncStatus | null;
+        error?: string;
+      } | null;
+      // /api/health answers 503 when the registry cannot be reached. Read the
+      // body before giving up: it carries the reason, and a bare "HTTP 503"
+      // tells an operator nothing they did not already know.
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      setData({ status: json?.syncStatus ?? null });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {

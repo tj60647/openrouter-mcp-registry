@@ -16,31 +16,71 @@ import {
 } from './db';
 import { generateEmbedding } from './embeddings';
 import { recordUsage } from './oauthStore';
+import { checkRateLimit } from './rateLimit';
 
 /** Fields dropped from list-style responses unless `verbose` is set — they dominate payload size. */
 const VERBOSE_ONLY_FIELDS = ['description', 'metadata'] as const;
+
+/**
+ * Every field of the shared `Model` record, and therefore the complete set of
+ * names `fields` accepts. Kept exhaustive on purpose: `MODEL_FIELDS satisfies
+ * readonly (keyof Model)[]` below makes adding a field to Model without adding
+ * it here a compile error, so the projection cannot silently fall behind.
+ *
+ * There are no nested (`pricing.prompt`) or snake_case spellings — unlike
+ * `sortBy`, which accepts both casings.
+ */
+const MODEL_FIELDS = [
+  'id',
+  'provider',
+  'displayName',
+  'description',
+  'modality',
+  'contextLength',
+  'maxCompletionTokens',
+  'inputPricePer1k',
+  'outputPricePer1k',
+  'imagePricePer1k',
+  'createdAt',
+  'providerExpirationAt',
+  'supportedParameters',
+  'metadata',
+  'fetchedAt',
+  'lastSeenAt',
+  'retiredAt',
+  'isAvailable',
+] as const satisfies readonly (keyof Model)[];
+
+type ModelField = (typeof MODEL_FIELDS)[number];
 
 /**
  * Trims model records returned by the list-style tools so a single page does
  * not blow up the caller's context window.
  *
  * - `fields` (when non-empty) wins: only those fields are returned, in the
- *   order given, with `id` always present. Unknown names are ignored.
+ *   order given, with `id` always present. An unrecognised name is rejected by
+ *   the schema before reaching here.
  * - Otherwise `verbose: true` returns the full record and `verbose: false`
  *   (the default) drops `description` and `metadata`.
  *
  * `get_model`, `resolve_model`, `compare_models` and the `registry://`
  * resources deliberately do NOT use this — they always return full records.
  */
-function projectModels(models: Model[], opts: { verbose: boolean; fields?: string[] }): unknown[] {
+function projectModels(
+  models: Model[],
+  opts: { verbose: boolean; fields?: readonly ModelField[] }
+): unknown[] {
   const { verbose, fields } = opts;
 
   if (fields && fields.length > 0) {
     return models.map((model) => {
-      const source = model as unknown as Record<string, unknown>;
       const picked: Record<string, unknown> = { id: model.id };
       for (const field of fields) {
-        if (field !== 'id' && field in source) picked[field] = source[field];
+        // hasOwnProperty rather than `in`: `in` walks the prototype chain, so
+        // 'constructor' and friends would have passed the old guard.
+        if (field !== 'id' && Object.prototype.hasOwnProperty.call(model, field)) {
+          picked[field] = model[field];
+        }
       }
       return picked;
     });
@@ -100,17 +140,37 @@ function verboseArg() {
 
 function fieldsArg() {
   return z
-    .array(z.string())
+    .array(z.enum(MODEL_FIELDS))
     .optional()
     .describe(
-      'Explicit projection: camelCase Model field names to return (e.g. ["displayName","contextLength","inputPricePer1k"]). Takes precedence over verbose. "id" is always included and unknown field names are ignored.'
+      `Explicit projection: camelCase Model field names to return (e.g. ["displayName","contextLength","inputPricePer1k"]). Takes precedence over verbose. "id" is always included. Only these names are accepted, and an unrecognised one is a validation error rather than a silently missing field: ${MODEL_FIELDS.join(', ')}.`
     );
 }
 
 /**
- * Wrap `server.tool` so every tool call records a usage row attributed to the
- * calling OAuth client (from the request's authInfo). Best-effort: a failed
- * usage write never affects the tool response. Applied before any tool is
+ * Per-client budgets for the tool path.
+ *
+ * Dynamic client registration is deliberately open (the catalogue is public,
+ * read-only data and interactive MCP clients bootstrap through it), and the
+ * limiters on /api/oauth/* throttle *acquiring* a token. Nothing throttled
+ * *using* one, so a self-registered client could call tools without bound.
+ *
+ * The general budget is deliberately generous — this is a read-only registry
+ * and a legitimate agent may page through the catalogue. semantic_search gets a
+ * tighter one because it is the only tool that makes a paid outbound call,
+ * embedding the query on every invocation.
+ */
+const TOOL_RATE_LIMIT = { limit: 600, windowMs: 60_000 };
+const SEMANTIC_SEARCH_RATE_LIMIT = { limit: 60, windowMs: 60_000 };
+
+/** Tools whose cost is not bounded by the registry alone. */
+const PAID_TOOLS = new Set(['semantic_search']);
+
+/**
+ * Wrap `server.tool` so every tool call is (a) charged against the calling
+ * OAuth client's budget and (b) recorded as a usage row attributed to that
+ * client (both from the request's authInfo). Usage logging is best-effort: a
+ * failed write never affects the tool response. Applied before any tool is
  * registered so all registrations are instrumented.
  */
 function instrumentUsage(server: McpServer): void {
@@ -126,6 +186,24 @@ function instrumentUsage(server: McpServer): void {
           (extra as { authInfo?: { clientId?: string } } | undefined)?.authInfo?.clientId ?? 'unknown';
         let ok = true;
         try {
+          const paid = PAID_TOOLS.has(name);
+          const allowed = await checkRateLimit(
+            paid ? `mcp:tool:${name}:${clientId}` : `mcp:tool:${clientId}`,
+            paid ? SEMANTIC_SEARCH_RATE_LIMIT : TOOL_RATE_LIMIT
+          );
+          if (!allowed) {
+            ok = false;
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Error: rate limit exceeded for ${name}. Retry in under a minute.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
           const result = await inner(a, extra);
           ok = !result?.isError;
           return result;
@@ -505,7 +583,7 @@ export async function initMcpServer(server: McpServer): Promise<void> {
   // Tool: get_sync_history
   server.tool(
     'get_sync_history',
-    'Get the history of sync attempts (most recent first). Each entry records whether the sync succeeded, how many models were synced, and any error message.',
+    'Get the history of sync attempts (most recent first). One row per attempt. status is "running" (started, not yet finished — success is null), "success", or "failure"; a failure always carries an error message. syncedAt is when the attempt started and finishedAt when it ended (null while running). A "running" row older than the newest finished row is an attempt whose process died mid-sync.',
     {
       limit: z
         .number()

@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch supersedes an in-flight run, but never
+# cancels a run on main -- those gate the deploy.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The job name doubles as the branch-protection status-check context, so keep
+  # it short and stable: renaming it silently detaches the required check and
+  # main stops being gated. The individual steps carry the descriptive names.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from the root package.json `packageManager` field, so the
+      # pin lives in one place and CI cannot drift from local development.
+      - uses: pnpm/action-setup@v4
+
+      # Must satisfy pnpm's own floor, not just the app's. pnpm 11 loads
+      # node:sqlite, which does not exist before Node 22.13 -- on Node 20 the
+      # runner dies at `pnpm store path` before installing anything.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --frozen-lockfile makes an out-of-date pnpm-lock.yaml a build failure
+      # rather than something CI silently papers over.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      # Runs the suites with coverage thresholds enforced, so a drop in coverage
+      # fails the build in the same step as a failing test.
+      - name: Test
+        run: pnpm -r test:coverage
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            packages/shared/coverage/lcov.info
+            apps/mcp/coverage/lcov.info
+            apps/web/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Build last: it is the slowest step and the least likely to catch
+      # something the previous three missed.
+      - name: Build
+        run: pnpm build
+        env:
+          # next build must not need real credentials. These are placeholders
+          # that satisfy presence checks only; nothing here reaches a network.
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_MCP_URL: http://localhost:3001

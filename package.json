@@ -3,22 +3,25 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=20",
+    "node": ">=22.13",
     "pnpm": ">=9"
   },
   "scripts": {
-    "dev": "npx -y pnpm --parallel --filter @openrouter-mcp/web --filter @openrouter-mcp/mcp dev",
-    "build": "npx -y pnpm --filter @openrouter-mcp/shared build && npx -y pnpm --filter @openrouter-mcp/web build && npx -y pnpm --filter @openrouter-mcp/mcp build",
-    "lint": "npx -y pnpm -r lint",
-    "typecheck": "npx -y pnpm -r typecheck",
-    "test": "npx -y pnpm -r test",
-    "db:migrate": "npx -y pnpm --filter @openrouter-mcp/web db:migrate",
-    "db:seed": "npx -y pnpm --filter @openrouter-mcp/web db:seed",
-    "db:create-admin": "npx -y pnpm --filter @openrouter-mcp/web db:create-admin",
-    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore"
+    "dev": "pnpm --parallel --filter @openrouter-mcp/web --filter @openrouter-mcp/mcp dev",
+    "build": "pnpm --filter @openrouter-mcp/web build && pnpm --filter @openrouter-mcp/mcp build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:migrate": "pnpm --filter @openrouter-mcp/web db:migrate",
+    "db:seed": "pnpm --filter @openrouter-mcp/web db:seed",
+    "db:create-admin": "pnpm --filter @openrouter-mcp/web db:create-admin",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore",
+    "test:coverage": "pnpm -r test:coverage",
+    "ci": "pnpm -r lint && pnpm -r typecheck && pnpm -r test && pnpm run build"
   },
   "devDependencies": {
     "prettier": "^3.2.5",
     "typescript": "^5.4.5"
-  }
+  },
+  "packageManager": "pnpm@11.17.0"
 }

@@ -44,7 +44,7 @@ function tokenError(error: string, status: number, description?: string): NextRe
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  if (!checkRateLimit(`oauth:token:${ip}`, TOKEN_RATE_LIMIT)) {
+  if (!(await checkRateLimit(`oauth:token:${ip}`, TOKEN_RATE_LIMIT))) {
     return tokenError('too_many_requests', 429);
   }
 

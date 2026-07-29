@@ -47,7 +47,7 @@ function errorRedirect(
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  if (!checkRateLimit(`oauth:authorize:${ip}`, AUTHORIZE_RATE_LIMIT)) {
+  if (!(await checkRateLimit(`oauth:authorize:${ip}`, AUTHORIZE_RATE_LIMIT))) {
     return errorPage('Too many authorization requests. Try again later.', 429);
   }
 

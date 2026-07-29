@@ -91,9 +91,9 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/models`            | List cached models (`?limit`, `?offset`, `?provider`, `?query`) |
 | `GET`  | `/api/models/:id`        | Get model by canonical ID                                       |
 | `POST` | `/api/resolve`           | Resolve model ID → canonical model                              |
-| `GET`  | `/api/health`            | Health check + sync status summary                              |
+| `GET`  | `/api/health`            | Health check plus the full `SyncStatus` record (`lastSuccessfulSync`, `lastAttemptedSync`, `lastError`, `recordCount`); `null` when no sync has been recorded. `200` when healthy, `503` when the registry is unreachable |
 | `POST` | `/api/admin/refresh`     | Trigger manual sync (requires `ADMIN_SECRET`)                   |
-| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured) |
+| `POST` | `/api/admin/verify-login`| Verify admin credentials for web-owned sessions (requires MCP OAuth when configured). Rate limited 10 attempts / 15 min per username *and* source address — per-username alone would let anyone lock an admin out — `429` beyond that |
 | `GET`  | `/api/admin/sync-status` | Full sync status (requires `ADMIN_SECRET`)                      |
 | `GET`  | `/api/admin/clients`     | List registered OAuth clients (requires `ADMIN_SECRET`)         |
 | `POST` | `/api/admin/clients/revoke` | Revoke or restore an OAuth client (requires `ADMIN_SECRET`)  |
@@ -116,7 +116,7 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/models`        | List cached models (`?limit`, `?offset`, `?provider`, `?query`, `?sortBy`, `?sortDir`, `?toolsOnly`, `?reasoningOnly`, `?availableOnly`, `?retiredOnly`) |
 | `GET`  | `/api/providers`     | List distinct provider names                                                                                                                             |
 | `POST` | `/api/resolve`       | Resolve model ID → canonical model                                                                                                                       |
-| `GET`  | `/api/health`        | Health check                                                                                                                                             |
+| `GET`  | `/api/health`        | Health check. Proxies the MCP host and passes its status through; `503` when that host is unreachable                                                     |
 | `GET`  | `/api/chat`          | Agent config — default model, available models, and MCP tools list                                                                                       |
 | `POST` | `/api/chat`          | Chatbot proxy — browser posts here; server-side route delegates LLM + tool calls to `apps/mcp`                                                           |
 | `POST` | `/api/admin/login`   | Create a web-owned admin session after server-side credential verification by apps/mcp; issues session cookie                                                                                        |
@@ -150,7 +150,7 @@ Argument conventions:
 
 - Filter arguments and returned record fields are **camelCase** (`maxInputPricePer1k`, `availableOnly`, `contextLength`). `sortBy` is the one exception: it accepts **both** snake_case and camelCase spellings for the same column (`created_at` ≡ `createdAt`, `input_price_per_1k` ≡ `inputPricePer1k`, and so on for `display_name`, `context_length`, `max_completion_tokens`, `output_price_per_1k`, `image_price_per_1k`). Default `id`.
 - `verbose` (boolean, default `false`) omits `description` and `metadata` from every returned record — they dominate payload size. Pass `verbose: true` to get them back.
-- `fields` (string array) is an explicit projection using camelCase `Model` field names. It wins over `verbose`, always includes `id`, and silently ignores unknown names.
+- `fields` (string array) is an explicit projection using camelCase `Model` field names. It wins over `verbose` and always includes `id`. Only the documented `Model` field names are accepted — an unrecognised one is a validation error, not a silently missing field. Unlike `sortBy`, `fields` takes camelCase only.
 - `verbose`/`fields` apply only to `list_models`, `search_models`, `find_models_by_criteria` and `semantic_search`. `get_model`, `resolve_model`, `compare_models` and the `registry://` resources always return full records.
 - Prices are **USD per 1,000 tokens** throughout.
 - `modality` is matched as a case-insensitive substring of OpenRouter's whole `inputs->outputs` string. To find vision models match the **input** side (`image->`); `text->image` is an image *generator*.
@@ -174,7 +174,8 @@ Notes:
 
 - The web UI now uses the term "Unavailable" instead of "Retired" because sync absence and provider-declared expiry are distinct states.
 - The `compare_models` MCP tool includes lifecycle fields such as `providerExpirationAt`, `lastSeenAt`, `retiredAt`, and `isAvailable` in its response.
-- **Known gap:** the retirement sweep in `db.ts::upsertModels` runs per provider and only over providers present in the current sync. If an *entire* provider disappears from OpenRouter's catalogue, its models are never swept and stay `isAvailable: true` with `retiredAt: null`. This is why `availableCount` can exceed `recordCount`.
+- The retirement sweep in `db.ts::upsertModels` is a single global `UPDATE` over every row the current sync did not touch, so a provider disappearing from OpenRouter's catalogue entirely is retired like any other absence. (It previously ran per provider, over only the providers present in the response, which by construction could never see a provider that had gone.)
+- The sweep is guarded by **volume**: if a sync fetches fewer than 80% of the models currently marked available, the sweep is skipped and the run is recorded with `partial: true` in `sync_history` and in the `/api/cron/sync` response. The catalogue still updates; only retirement waits for a sync that looks whole. Consecutive `partial` runs mean retirement data is going stale.
 - A small number of rows retired before the `retired_at` column existed had it backfilled to equal `fetched_at`, so for those `retiredAt` is the last sync the model *was* present rather than the first sync it was missing. They are identifiable by `retiredAt === lastSeenAt`.
 
 ### Resources
@@ -245,7 +246,7 @@ pnpm dev
 | Script            | Description                 |
 | ----------------- | --------------------------- |
 | `pnpm dev`        | Start all apps in parallel  |
-| `pnpm build`      | Build all packages and apps |
+| `pnpm build`      | Build both Next.js apps. `packages/shared` has no build step: it is consumed as TypeScript source through `transpilePackages`, and its `exports` point at `./src/index.ts` |
 | `pnpm test`       | Run all tests               |
 | `pnpm typecheck`  | TypeScript type check       |
 | `pnpm lint`       | Lint all packages           |
@@ -296,7 +297,24 @@ In **Settings → Environment Variables**:
 
 #### 4. Run database migrations
 
-> **Deploy ordering:** run `pnpm db:migrate` **before** the new `apps/mcp` build serves traffic. Client registration inserts `oauth_clients.registration_access_token_hash`, so without that column `POST /api/oauth/register` fails. Existing rows get `NULL` and simply cannot use the RFC 7592 management endpoint (they always get `401` there); the admin panel's revoke action still covers them.
+> **Deploy ordering:** run `pnpm db:migrate` **before** the new `apps/mcp` build serves traffic. The migration is idempotent and safe to re-run, and the old build tolerates the new columns, so migrating first is always the correct order. What breaks if you deploy first:
+>
+> | Missing schema | Effect on the new build |
+> | -------------- | ----------------------- |
+> | `rate_limits` table | Rate limiting is **disabled** and every check logs `rate_limits table is missing` at error level. This one deliberately fails *open*: failing closed would 429 every OAuth endpoint and every MCP tool call at once, and a forgotten manual migration should not be a total outage. Grep your logs for that message after any deploy. |
+> | `sync_history.status` / `finished_at` / `partial` | `get_sync_history` errors, and `/api/cron/sync` fails while opening its attempt. The catalogue is not modified, so nothing is corrupted — the sync simply does not run until you migrate. |
+> | `oauth_clients.registration_access_token_hash` | `POST /api/oauth/register` fails. Rows predating the column get `NULL` and cannot use the RFC 7592 management endpoint (always `401` there); the admin panel's revoke action still covers them. |
+>
+> **The migration removes rows, once.** Before the lifecycle existed, every sync wrote *two* `sync_history` rows: a start marker, then the real outcome. Under the one-row-per-attempt model those markers are duplicates, and leaving them would make `get_sync_history` report roughly half of all historical syncs as attempts that died mid-run — the opposite of the truth, and contrary to what the tool's own description tells an agent. The migration deletes a marker only when a completed row follows it within ten minutes; an unpaired marker is kept and correctly reported as `running`.
+>
+> It snapshots the table into `sync_history_pre_lifecycle_backup` first (created once, never overwritten on a re-run) and prints how many rows it touched. To undo:
+>
+> ```sql
+> DELETE FROM sync_history;
+> INSERT INTO sync_history SELECT * FROM sync_history_pre_lifecycle_backup;
+> ```
+>
+> Drop that table once you are satisfied with the migrated history.
 
 After the first deploy, run migrations against your Neon database:
 
@@ -315,7 +333,9 @@ pnpm db:seed
 
 `apps/mcp/vercel.json` configures a daily cron at `0 0 * * *` (midnight UTC) that calls `/api/cron/sync`. When `CRON_SECRET` is set on the project, Vercel sends it to the cron invocation as a Bearer token. The same route can be triggered on demand with `curl -sS <mcp-host>/api/cron/sync -H "Authorization: Bearer $CRON_SECRET"` (a `GET`), or from the admin panel's **Sync** action.
 
-Each sync writes **two** `sync_history` rows: a start marker (`success: false`, `record_count: null`, `error: null`) written before OpenRouter is contacted, then the real outcome. Only the second row reflects whether the sync worked — `get_sync_history` shows both.
+Each sync writes **one** `sync_history` row. It is opened with `status = 'running'` (`success: null`) before OpenRouter is contacted and updated in place when the attempt ends, so a `success: false` row is always a genuine failure and always carries an `error`. `synced_at` is the attempt's start and `finished_at` its end (`null` while running); a `running` row older than the newest finished row is an attempt whose process died mid-sync. `partial: true` marks a run that updated the catalogue but skipped the retirement sweep because the upstream response looked truncated.
+
+Rows written before this lifecycle existed are backfilled by `pnpm db:migrate`: old start markers become `running` rather than being counted as outages.
 
 > **Note:** You must set `CRON_SECRET` yourself — Vercel does **not** create it automatically (the Neon integration does not provide it). In production the cron route returns `503` ("Cron auth not configured") when the secret is missing and `NODE_ENV=production`, so the job fails on every run until you set it. Generate one with `openssl rand -hex 32`, add it to the project's Production environment, and redeploy so the new deployment picks it up.
 
@@ -485,7 +505,8 @@ curl -sS -X POST https://your-mcp-app.vercel.app/api/oauth/register \
 - Requesting `client_credentials` together with `redirect_uris` is rejected with `400 invalid_client_metadata` — a public client holds no secret, so honouring that grant would issue tokens to anyone who learns the `client_id`. Also rejected: an empty `grant_types` array, unsupported values, `refresh_token` without `authorization_code`, and `authorization_code`/`refresh_token` with no `redirect_uris`. Nothing is written to the database when a rule fires.
 - At the token endpoint, requesting a grant the client is not registered for returns `400 unauthorized_client`. Grants this server does not implement at all still return `400 unsupported_grant_type`.
 - Clients registered before `grant_types` was enforced keep working: a stored client that has a secret and no `redirect_uris` gets `client_credentials` added to its effective grant list on read. Public (secret-less) clients are deliberately **not** grandfathered.
-- Registration is rate-limited to 5 per 15 minutes per IP. Operators can require an initial access token with `OAUTH_REGISTRATION_ACCESS_TOKEN`, or disable registration entirely with `OAUTH_DISABLE_REGISTRATION=true`.
+- Registration is rate-limited to 5 per 15 minutes per IP, counted in Postgres so the limit holds across serverless instances. Operators can require an initial access token with `OAUTH_REGISTRATION_ACCESS_TOKEN`, or disable registration entirely with `OAUTH_DISABLE_REGISTRATION=true`.
+- Open registration is a deliberate choice, and the exposure it grants is bounded: the only grantable scope is `mcp:read`, every tool is read-only, and the tool path itself carries a per-client budget — 600 calls/minute overall and 60/minute for `semantic_search`, the one tool that spends money by embedding its query. Throttled calls return an MCP error result and never reach the database or OpenRouter.
 
 #### Managing a registration (RFC 7592)
 

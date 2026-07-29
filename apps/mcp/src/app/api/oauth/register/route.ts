@@ -3,9 +3,26 @@
  *
  * Interactive MCP clients (Claude Code, Cursor, VS Code…) self-register here as
  * part of the authorization-code + PKCE flow, then use /api/oauth/authorize.
- * Registration is enabled by default because the MCP client bootstrap depends on
- * it; set OAUTH_DISABLE_REGISTRATION=true to turn it off (e.g. if you provision
- * clients manually). Registrations are persisted in Postgres.
+ * Registrations are persisted in Postgres.
+ *
+ * OPEN BY DEFAULT — THIS IS A DECISION, NOT AN OVERSIGHT. The registry serves
+ * public, read-only catalogue data, and the MCP client bootstrap depends on
+ * self-registration: requiring manual provisioning would mean no Claude Code or
+ * Cursor user could connect without an operator in the loop. The exposure a
+ * self-registered client gets is bounded deliberately:
+ *
+ *   - the only grantable scope is mcp:read (ALLOWED_SCOPES in lib/oauth.ts),
+ *     and every requested scope is coerced to it;
+ *   - every tool is read-only against the registry;
+ *   - the one tool that spends money, semantic_search, has a per-client
+ *     per-minute budget, as does the tool path as a whole (lib/mcp-server.ts);
+ *   - registration itself is limited to 5 per 15 minutes per IP, durably.
+ *
+ * Two levers exist for operators who want it closed: set
+ * OAUTH_REGISTRATION_ACCESS_TOKEN to require an initial access token on this
+ * endpoint, or OAUTH_DISABLE_REGISTRATION=true to disable it entirely. Neither
+ * is the default, on purpose. Revisit that only if the scope set stops being
+ * read-only.
  *
  * `grant_types` is honoured (RFC 7591 §3.2.1) and echoed back. When omitted it
  * defaults to authorization_code + refresh_token for clients that register
@@ -85,7 +102,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  if (!checkRateLimit(`oauth:register:${ip}`, REGISTER_RATE_LIMIT)) {
+  if (!(await checkRateLimit(`oauth:register:${ip}`, REGISTER_RATE_LIMIT))) {
     return NextResponse.json({ error: 'too_many_requests' }, { status: 429 });
   }
 

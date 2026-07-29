@@ -46,6 +46,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (verifyRes.status === 401) {
       return NextResponse.json({ error: 'Invalid username or password' }, { status: 401 });
     }
+    // The durable, username-keyed limiter lives on the MCP side; surface its
+    // verdict rather than reporting it as a configuration problem.
+    if (verifyRes.status === 429) {
+      return NextResponse.json({ error: 'Too many login attempts. Try again later.' }, { status: 429 });
+    }
     if (!verifyRes.ok) {
       return NextResponse.json({ error: 'Auth not configured' }, { status: 503 });
     }

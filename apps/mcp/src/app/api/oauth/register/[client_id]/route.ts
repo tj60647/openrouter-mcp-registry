@@ -45,7 +45,7 @@ async function authorizeRequest(
   clientId: string,
 ): Promise<ClientRegistration | NextResponse> {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-  if (!checkRateLimit(`oauth:register-manage:${ip}`, MANAGE_RATE_LIMIT)) {
+  if (!(await checkRateLimit(`oauth:register-manage:${ip}`, MANAGE_RATE_LIMIT))) {
     return NextResponse.json({ error: 'too_many_requests' }, { status: 429 });
   }
 

@@ -151,15 +151,137 @@ async function migrate() {
     ON CONFLICT (id) DO NOTHING
   `;
 
-  // Append-only sync history log — one row per sync attempt
+  // Sync history log — one row per sync ATTEMPT, opened as 'running' when the
+  // attempt starts and updated in place when it finishes. `success` is NULL
+  // while running, so a `success = FALSE` row is always a genuine failure.
+  // `status` is deliberately nullable with NO default. Every writer in the
+  // current build sets it explicitly, so a default would only ever apply to a
+  // row written by an OLDER build — which inserts (synced_at, success,
+  // record_count, error) and nothing else. A default of 'running' would stamp
+  // those rows as in-flight, and rowToSyncHistoryEntry short-circuits on a
+  // non-NULL status, so a successful sync would be reported as one whose
+  // process died. Leaving it NULL lets the reader's legacy inference classify
+  // them from `success`, which is exactly what it is there for.
   await sql`
     CREATE TABLE IF NOT EXISTS sync_history (
       id BIGSERIAL PRIMARY KEY,
       synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      success BOOLEAN NOT NULL,
+      status TEXT,
+      success BOOLEAN,
       record_count INTEGER,
-      error TEXT
+      error TEXT,
+      finished_at TIMESTAMPTZ,
+      partial BOOLEAN NOT NULL DEFAULT FALSE
     )
+  `;
+
+  // Idempotent upgrade for deployments created before the lifecycle columns.
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS status TEXT`;
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`;
+  // `partial` marks a run that updated the catalogue but skipped the retirement
+  // sweep because the upstream response looked truncated.
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT FALSE`;
+  await sql`ALTER TABLE sync_history ALTER COLUMN success DROP NOT NULL`;
+  // Both must be dropped before the passes below, which write NULL into status.
+  await sql`ALTER TABLE sync_history ALTER COLUMN status DROP DEFAULT`;
+  await sql`ALTER TABLE sync_history ALTER COLUMN status DROP NOT NULL`;
+
+  // Snapshot before anything below touches a row.
+  //
+  // The passes that follow include the one destructive statement in this file.
+  // The rows it removes are write artefacts of the defect this release fixes and
+  // carry nothing their surviving partner does not, but "irreversible" is a poor
+  // property for a migration people run casually, and this table is small enough
+  // that insurance is free.
+  //
+  // IF NOT EXISTS is load-bearing: on a re-run it must preserve the ORIGINAL
+  // snapshot rather than overwrite it with already-migrated data. To restore:
+  //   DELETE FROM sync_history;
+  //   INSERT INTO sync_history SELECT * FROM sync_history_pre_lifecycle_backup;
+  // Drop the backup table once you are satisfied with the migrated history.
+  const legacy = await sql`SELECT COUNT(*)::int AS n FROM sync_history WHERE status IS NULL`;
+  const legacyRowCount = legacy.rows[0]?.n ?? 0;
+  if (legacyRowCount > 0) {
+    await sql`
+      CREATE TABLE IF NOT EXISTS sync_history_pre_lifecycle_backup AS
+      SELECT * FROM sync_history
+    `;
+    console.log(
+      `  sync_history: ${legacyRowCount} pre-lifecycle rows; snapshot in sync_history_pre_lifecycle_backup`
+    );
+  }
+
+  // Repair for databases migrated by an earlier revision of this script, which
+  // left status defaulting to 'running' and NOT NULL. Rows an older build
+  // inserted after that migration took the default, so they carry
+  // status = 'running' alongside a real verdict in `success` — a combination the
+  // current build never writes, since it clears `success` when it opens an
+  // attempt. Clearing status hands them to the backfill passes below.
+  await sql`
+    UPDATE sync_history
+    SET status = NULL
+    WHERE status = 'running' AND success IS NOT NULL
+  `;
+
+  // Retire the old two-row-per-sync artefact.
+  //
+  // The previous writer emitted a start marker (success = FALSE, no error, no
+  // record count) before contacting OpenRouter, then the real outcome a couple
+  // of seconds later. Under the one-row-per-attempt model those markers are
+  // duplicates: the outcome row beside each one already records the same
+  // attempt. Leaving them would make `get_sync_history` report roughly half of
+  // all historical syncs as attempts that died mid-run, which is the opposite
+  // of the truth and directly contradicts the tool's own description.
+  //
+  // A marker is only removed when a completed row follows it within ten
+  // minutes; that pairing is what proves it was a marker rather than an attempt
+  // that genuinely never finished. The surviving row carries the outcome, the
+  // record count and the timestamp — all the marker held beyond that was a
+  // start time two seconds earlier. An UNPAIRED marker is left alone and
+  // classified 'running' below, which for that row is accurate.
+  //
+  // This is the one destructive statement in the file. It is deliberate: these
+  // rows exist only because of the defect fixed in this release, and no
+  // consumer reads them (`get_sync_history` is the sole reader of this table),
+  // and the snapshot above makes it reversible.
+  const removed = await sql`
+    DELETE FROM sync_history marker
+    WHERE marker.status IS NULL
+      AND marker.success = FALSE
+      AND marker.error IS NULL
+      AND marker.record_count IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM sync_history outcome
+        WHERE outcome.status IS NULL
+          AND (outcome.success = TRUE OR outcome.error IS NOT NULL)
+          AND outcome.synced_at > marker.synced_at
+          AND outcome.synced_at <= marker.synced_at + INTERVAL '10 minutes'
+      )
+  `;
+  if (removed.rowCount > 0) {
+    console.log(`  sync_history: removed ${removed.rowCount} paired start markers left by the old writer`);
+  }
+
+  // Backfill in three passes, most specific first. The middle pass now catches
+  // only UNPAIRED start markers — attempts the old code opened and never
+  // completed — for which 'running' is the honest classification.
+  await sql`
+    UPDATE sync_history
+    SET status = 'success', finished_at = COALESCE(finished_at, synced_at)
+    WHERE status IS NULL AND success = TRUE
+  `;
+
+  await sql`
+    UPDATE sync_history
+    SET status = 'running', success = NULL, finished_at = NULL
+    WHERE status IS NULL AND success = FALSE AND error IS NULL AND record_count IS NULL
+  `;
+
+  await sql`
+    UPDATE sync_history
+    SET status = 'failure', finished_at = COALESCE(finished_at, synced_at)
+    WHERE status IS NULL
   `;
 
   await sql`
@@ -238,6 +360,19 @@ async function migrate() {
   // handed to the client once at registration, letting it read or delete its own
   // registration. NULL for clients registered before this column existed.
   await sql`ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS registration_access_token_hash TEXT`;
+
+  // Shared rate-limit counters. Lives in Postgres rather than process memory so
+  // a limit is enforced across serverless instances instead of per warm lambda.
+  await sql`
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      key TEXT PRIMARY KEY,
+      window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      count INTEGER NOT NULL DEFAULT 0
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS rate_limits_window_start_idx ON rate_limits(window_start)
+  `;
 
   // Per-client MCP usage log — one row per tool call, for usage-by-agent reporting.
   await sql`

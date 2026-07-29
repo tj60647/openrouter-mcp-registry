@@ -16,6 +16,10 @@ const MAX_OUTPUT_TOKENS = 16_384;
 const MAX_TEMPERATURE = 2.0;
 const MODEL_ID_RE = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/;
 
+/** Cached service token, reused across requests on a warm instance. */
+let cachedServiceToken: { value: string; expiresAt: number } | null = null;
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+
 const SYSTEM_PROMPT =
   `You are a helpful assistant for the OpenRouter Registry MCP, specializing in helping AI agents and developers build new agents. ` +
   `Imagine you are an AI agent whose job is to help other agents get built: you understand what models are best for specific tasks, how to configure them, and how to write effective system prompts. ` +
@@ -88,14 +92,27 @@ async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
     throw new Error('Both MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured together.');
   }
 
+  // Reuse the token until shortly before it expires. This route calls its own
+  // host's token endpoint, which is rate limited per source address, so minting
+  // one per chat message would spend that budget on itself. Mirrors the cache in
+  // apps/web/src/lib/mcpAuth.ts.
+  if (cachedServiceToken && Date.now() < cachedServiceToken.expiresAt) {
+    return cachedServiceToken.value;
+  }
+
   const res = await fetch(`${mcpUrl}/api/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, scope: 'mcp:read' }),
   });
   if (!res.ok) throw new Error(`MCP OAuth token request failed with status ${res.status}.`);
-  const data = (await res.json()) as { access_token?: string };
-  return data.access_token ?? null;
+  const data = (await res.json()) as { access_token?: string; expires_in?: number };
+  const token = data.access_token ?? null;
+  if (token) {
+    const ttlMs = Math.min((data.expires_in ?? 3600) * 1000, 3600_000) - TOKEN_REFRESH_MARGIN_MS;
+    if (ttlMs > 0) cachedServiceToken = { value: token, expiresAt: Date.now() + ttlMs };
+  }
+  return token;
 }
 
 async function connectMcpClient(mcpUrl: string): Promise<Client> {
