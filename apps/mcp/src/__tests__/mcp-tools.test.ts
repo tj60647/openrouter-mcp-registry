@@ -175,6 +175,7 @@ function makeSyncHistoryEntry(overrides: Partial<SyncHistoryEntry> = {}): SyncHi
     recordCount: 42,
     error: null,
     finishedAt: new Date('2024-06-01T12:00:02Z'),
+    partial: false,
     ...overrides,
   };
 }

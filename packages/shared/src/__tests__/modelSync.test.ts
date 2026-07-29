@@ -11,7 +11,14 @@ const makeProvider = (models: ProviderModel[]): ModelProvider => ({
 /** Every call the service makes against the attempt lifecycle, in order. */
 type AttemptCall =
   | { kind: 'begin'; id: number }
-  | { kind: 'complete'; attemptId: number | null; success: boolean; error?: string; count?: number };
+  | {
+      kind: 'complete';
+      attemptId: number | null;
+      success: boolean;
+      error?: string;
+      count?: number;
+      partial?: boolean;
+    };
 
 const makeRepository = (
   overrides: Partial<ModelRepository> = {}
@@ -28,14 +35,15 @@ const makeRepository = (
     attempts,
     async upsertModels(models) {
       upserted.push(...models);
+      return { retired: 0, sweepSkipped: false };
     },
     async beginSyncAttempt() {
       const id = nextId++;
       attempts.push({ kind: 'begin', id });
       return id;
     },
-    async completeSyncAttempt(attemptId, success, error, count) {
-      attempts.push({ kind: 'complete', attemptId, success, error, count });
+    async completeSyncAttempt(attemptId, { success, error, count, partial }) {
+      attempts.push({ kind: 'complete', attemptId, success, error, count, partial });
     },
     async acquireSyncLock() {
       if (locked) return false;
@@ -76,7 +84,7 @@ describe('ModelSyncService', () => {
 
     expect(repo.attempts).toEqual([
       { kind: 'begin', id: 1 },
-      { kind: 'complete', attemptId: 1, success: true, error: undefined, count: 1 },
+      { kind: 'complete', attemptId: 1, success: true, error: undefined, count: 1, partial: false },
     ]);
   });
 
@@ -127,7 +135,7 @@ describe('ModelSyncService', () => {
 
     expect(result.success).toBe(true);
     expect(repo.attempts).toEqual([
-      { kind: 'complete', attemptId: null, success: true, error: undefined, count: 1 },
+      { kind: 'complete', attemptId: null, success: true, error: undefined, count: 1, partial: false },
     ]);
   });
 
@@ -149,6 +157,7 @@ describe('ModelSyncService', () => {
         success: false,
         error: 'history table unreachable',
         count: undefined,
+        partial: undefined,
       },
     ]);
   });
@@ -177,5 +186,50 @@ describe('ModelSyncService', () => {
     const result = await svc.sync();
     expect(result.success).toBe(false);
     expect(result.error).toContain('network error');
+  });
+});
+
+// ── Partial runs ──────────────────────────────────────────────────────────────
+// When the repository skips the retirement sweep because the upstream response
+// looked truncated, the run must be reported as partial rather than as a clean
+// success -- otherwise an operator has no way to tell that retirement is stale.
+
+describe('ModelSyncService partial runs', () => {
+  it('marks the attempt partial when the sweep was skipped', async () => {
+    const provider = makeProvider([{ id: 'openai/gpt-4o', name: 'GPT-4o' }]);
+    const repo = makeRepository({
+      upsertModels: async () => ({ retired: 0, sweepSkipped: true }),
+    });
+
+    const result = await new ModelSyncService(provider, repo).sync();
+
+    expect(result.success).toBe(true);
+    expect(result.partial).toBe(true);
+    expect(repo.attempts[1]).toMatchObject({ kind: 'complete', success: true, partial: true });
+  });
+
+  it('does not report a retired count for a partial run', async () => {
+    const provider = makeProvider([{ id: 'openai/gpt-4o', name: 'GPT-4o' }]);
+    const repo = makeRepository({
+      upsertModels: async () => ({ retired: 0, sweepSkipped: true }),
+    });
+
+    const result = await new ModelSyncService(provider, repo).sync();
+
+    // Reporting "0 retired" would read as "nothing needed retiring", which is
+    // the opposite of what a skipped sweep means.
+    expect(result).not.toHaveProperty('modelsRetired');
+  });
+
+  it('reports the retired count for a complete run', async () => {
+    const provider = makeProvider([{ id: 'openai/gpt-4o', name: 'GPT-4o' }]);
+    const repo = makeRepository({
+      upsertModels: async () => ({ retired: 4, sweepSkipped: false }),
+    });
+
+    const result = await new ModelSyncService(provider, repo).sync();
+
+    expect(result.modelsRetired).toBe(4);
+    expect(result.partial).toBeUndefined();
   });
 });

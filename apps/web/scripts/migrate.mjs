@@ -162,13 +162,17 @@ async function migrate() {
       success BOOLEAN,
       record_count INTEGER,
       error TEXT,
-      finished_at TIMESTAMPTZ
+      finished_at TIMESTAMPTZ,
+      partial BOOLEAN NOT NULL DEFAULT FALSE
     )
   `;
 
   // Idempotent upgrade for deployments created before the lifecycle columns.
   await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS status TEXT`;
   await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`;
+  // `partial` marks a run that updated the catalogue but skipped the retirement
+  // sweep because the upstream response looked truncated.
+  await sql`ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`ALTER TABLE sync_history ALTER COLUMN success DROP NOT NULL`;
 
   // Backfill in three passes, most specific first. The middle pass is the one

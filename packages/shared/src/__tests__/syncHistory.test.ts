@@ -10,6 +10,7 @@ const makeRow = (overrides: Partial<SyncHistoryRow> = {}): SyncHistoryRow => ({
   record_count: 367,
   error: null,
   finished_at: '2026-07-29T00:00:48.813Z',
+  partial: false,
   ...overrides,
 });
 

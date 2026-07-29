@@ -795,14 +795,21 @@ data: {"result":{…},"jsonrpc":"2.0","id":1}
           production table found zero rows in either inconsistent combination.
         </p>
         <p style={MUTED}>
-          <strong style={{ color: 'var(--text)' }}>One known gap.</strong> The retirement sweep runs
-          per provider, and only over the providers present in the current sync. If an{' '}
-          <em>entire provider</em> disappears from OpenRouter&apos;s catalogue, the sweep never
-          visits it, so its models stay <code>isAvailable: true</code> with{' '}
-          <code>retiredAt: null</code> indefinitely. This is the reason{' '}
-          <code>availableCount</code> can exceed <code>recordCount</code>. You can spot these rows
-          yourself: their <code>lastSeenAt</code> is older than the newest{' '}
-          <code>lastSeenAt</code> in the catalogue.
+          <strong style={{ color: 'var(--text)' }}>Whole-provider disappearances are covered.</strong>{' '}
+          The sweep is a single global <code>UPDATE</code> over every row the current sync did not
+          touch, so a provider vanishing from OpenRouter&apos;s catalogue entirely is retired like
+          any other absence. It used to run per provider, over only the providers present in the
+          response — which by construction could never see a provider that had gone.
+        </p>
+        <p style={MUTED}>
+          <strong style={{ color: 'var(--text)' }}>Guarded by volume, not by partitioning.</strong>{' '}
+          A global sweep makes a truncated upstream response dangerous, so if a sync fetches fewer
+          than 80% of the models currently marked available, the sweep is skipped and the run is
+          recorded with <code>partial: true</code> in <code>get_sync_history</code>. The catalogue
+          still updates; only retirement waits for a sync that looks whole. Deferring retirement by
+          a day is recoverable — retiring most of the catalogue on one bad response is not. A run
+          of consecutive <code>partial</code> entries means retirement data is going stale and
+          upstream should be checked.
         </p>
         <p style={{ ...SMALL_MUTED, marginBottom: 0 }}>
           Historical footnote: a small number of rows were retired before the{' '}

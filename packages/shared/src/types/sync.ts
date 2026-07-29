@@ -43,6 +43,12 @@ export interface SyncHistoryEntry {
   error: string | null;
   /** `null` while the attempt is still `running`. */
   finishedAt: Date | null;
+  /**
+   * The attempt succeeded but the retirement sweep was skipped, because the
+   * upstream response held too little of the catalogue to trust. Models absent
+   * from that response are still marked available.
+   */
+  partial: boolean;
 }
 
 export interface SyncHistoryRow {
@@ -53,6 +59,7 @@ export interface SyncHistoryRow {
   record_count: number | string | null;
   error: string | null;
   finished_at: Date | string | null;
+  partial: boolean | null;
 }
 
 /**
@@ -82,5 +89,6 @@ export function rowToSyncHistoryEntry(row: SyncHistoryRow): SyncHistoryEntry {
       : null,
     error: row.error ?? null,
     finishedAt: status === 'running' || row.finished_at == null ? null : new Date(row.finished_at),
+    partial: row.partial ?? false,
   };
 }

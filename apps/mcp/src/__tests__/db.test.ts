@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ModelRow } from '@openrouter-mcp/shared';
+import type { Model, ModelRow } from '@openrouter-mcp/shared';
 import type { SyncStatusRow, SyncHistoryRow } from '@openrouter-mcp/shared';
 
 // ── Mock @vercel/postgres ─────────────────────────────────────────────────────
@@ -16,14 +16,21 @@ import type { SyncStatusRow, SyncHistoryRow } from '@openrouter-mcp/shared';
 // declarations, so mockQuery/mockSql would be uninitialized at execution time
 // without this.
 
-const { mockQuery, mockSql } = vi.hoisted(() => ({
+const { mockQuery, mockSql, mockClientQuery, mockRelease } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockSql: vi.fn(),
+  // upsertModels runs inside an explicit transaction on a pooled client, so it
+  // needs db.connect() as well as db.query.
+  mockClientQuery: vi.fn(),
+  mockRelease: vi.fn(),
 }));
 
 vi.mock('@vercel/postgres', () => ({
   sql: mockSql,
-  db: { query: mockQuery },
+  db: {
+    query: mockQuery,
+    connect: async () => ({ query: mockClientQuery, release: mockRelease }),
+  },
 }));
 
 // ── Import module under test after mock registration ─────────────────────────
@@ -85,6 +92,7 @@ function makeSyncHistoryRow(overrides: Partial<SyncHistoryRow> = {}): SyncHistor
     record_count: 42,
     error: null,
     finished_at: new Date('2024-06-01T12:00:02Z'),
+    partial: false,
     ...overrides,
   };
 }
@@ -463,29 +471,29 @@ describe('createModelRepository sync attempt lifecycle', () => {
   it('updates the opened row in place on success instead of appending', async () => {
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
 
-    await createModelRepository().completeSyncAttempt(7, true, undefined, 367);
+    await createModelRepository().completeSyncAttempt(7, { success: true, count: 367 });
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('UPDATE sync_history');
     expect(sql).not.toContain('INSERT INTO sync_history');
-    expect(params).toEqual([7, 'success', true, 367, null, expect.any(String)]);
+    expect(params).toEqual([7, 'success', true, 367, null, expect.any(String), false]);
   });
 
   it('updates the opened row in place on failure instead of appending', async () => {
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
 
-    await createModelRepository().completeSyncAttempt(7, false, 'network error');
+    await createModelRepository().completeSyncAttempt(7, { success: false, error: 'network error' });
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('UPDATE sync_history');
-    expect(params).toEqual([7, 'failure', false, null, 'network error', expect.any(String)]);
+    expect(params).toEqual([7, 'failure', false, null, 'network error', expect.any(String), false]);
   });
 
   it('only finalises a row that is still running', async () => {
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
-    await createModelRepository().completeSyncAttempt(7, true, undefined, 1);
+    await createModelRepository().completeSyncAttempt(7, { success: true, count: 1 });
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("status = 'running'");
   });
@@ -493,11 +501,11 @@ describe('createModelRepository sync attempt lifecycle', () => {
   it('appends a standalone outcome row when no attempt was opened', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
-    await createModelRepository().completeSyncAttempt(null, false, 'boom');
+    await createModelRepository().completeSyncAttempt(null, { success: false, error: 'boom' });
 
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('INSERT INTO sync_history');
-    expect(params).toEqual([expect.any(String), 'failure', false, null, 'boom']);
+    expect(params).toEqual([expect.any(String), 'failure', false, null, 'boom', false]);
   });
 
   it('falls back to an append when the opened row can no longer be updated', async () => {
@@ -505,7 +513,7 @@ describe('createModelRepository sync attempt lifecycle', () => {
       .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    await createModelRepository().completeSyncAttempt(7, true, undefined, 12);
+    await createModelRepository().completeSyncAttempt(7, { success: true, count: 12 });
 
     expect(mockQuery).toHaveBeenCalledTimes(2);
     const [insertSql] = mockQuery.mock.calls[1] as [string, unknown[]];
@@ -519,11 +527,189 @@ describe('createModelRepository sync attempt lifecycle', () => {
 
     const repo = createModelRepository();
     const id = await repo.beginSyncAttempt();
-    await repo.completeSyncAttempt(id, true, undefined, 367);
+    await repo.completeSyncAttempt(id, { success: true, count: 367 });
 
     const inserts = mockQuery.mock.calls.filter(([sql]) =>
       (sql as string).includes('INSERT INTO sync_history')
     );
     expect(inserts).toHaveLength(1);
+  });
+});
+
+// ── Retirement sweep ──────────────────────────────────────────────────────────
+// The sweep used to loop over the providers present in the current response.
+// That can only ever see providers that are still there, so if an entire
+// provider disappeared from the catalogue its models were never swept and kept
+// isAvailable: true forever -- exactly the case retirement exists to catch.
+
+describe('createModelRepository retirement sweep', () => {
+  const SYNC_AT = new Date('2026-07-29T00:00:46.754Z');
+
+  function makeModel(overrides: Partial<Model> = {}): Model {
+    return {
+      id: 'openai/gpt-4o',
+      provider: 'openai',
+      displayName: 'GPT-4o',
+      description: null,
+      modality: 'text->text',
+      contextLength: 128000,
+      maxCompletionTokens: null,
+      inputPricePer1k: null,
+      outputPricePer1k: null,
+      imagePricePer1k: null,
+      createdAt: null,
+      providerExpirationAt: null,
+      supportedParameters: [],
+      metadata: {},
+      fetchedAt: SYNC_AT,
+      lastSeenAt: SYNC_AT,
+      retiredAt: null,
+      isAvailable: true,
+      ...overrides,
+    };
+  }
+
+  /** `available` is the count of currently-available rows the baseline query sees. */
+  function primeClient({ available, retired = 0 }: { available: number; retired?: number }) {
+    mockClientQuery.mockReset();
+    mockClientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ count: String(available) }] };
+      if (sql.includes('UPDATE models')) return { rows: [], rowCount: retired };
+      return { rows: [], rowCount: 0 };
+    });
+  }
+
+  /** Every statement the transaction issued, in order. */
+  function statements(): string[] {
+    return mockClientQuery.mock.calls.map(([sql]) => sql as string);
+  }
+
+  function sweeps(): string[] {
+    return statements().filter((s) => s.includes('UPDATE models') && s.includes('is_available = FALSE'));
+  }
+
+  it('sweeps once globally rather than once per provider', async () => {
+    primeClient({ available: 3 });
+
+    await createModelRepository().upsertModels([
+      makeModel({ id: 'openai/gpt-4o', provider: 'openai' }),
+      makeModel({ id: 'anthropic/claude', provider: 'anthropic' }),
+      makeModel({ id: 'google/gemini', provider: 'google' }),
+    ]);
+
+    // Three providers in the response, one sweep. The old code issued three.
+    expect(sweeps()).toHaveLength(1);
+  });
+
+  it('does not scope the sweep to the providers present in the response', async () => {
+    primeClient({ available: 1 });
+
+    await createModelRepository().upsertModels([makeModel({ provider: 'openai' })]);
+
+    // The defect in one assertion: a `provider = $1` predicate is what made a
+    // vanished provider unreachable by the sweep.
+    expect(sweeps()[0]).not.toContain('provider =');
+  });
+
+  it('retires every row not touched by this sync, whatever its provider', async () => {
+    primeClient({ available: 1 });
+
+    await createModelRepository().upsertModels([makeModel({ provider: 'openai' })]);
+
+    const sweep = sweeps()[0]!;
+    expect(sweep).toContain('fetched_at <');
+    expect(sweep).toContain('is_available = FALSE');
+  });
+
+  it('reports how many rows it retired', async () => {
+    primeClient({ available: 1, retired: 3 });
+
+    const outcome = await createModelRepository().upsertModels([makeModel()]);
+
+    expect(outcome).toEqual({ retired: 3, sweepSkipped: false });
+  });
+
+  // ── Volume guard ────────────────────────────────────────────────────────────
+  // A global sweep makes a truncated upstream response far more dangerous: it
+  // would mass-retire everything missing in one transaction.
+
+  it('skips the sweep when the response is far smaller than the catalogue', async () => {
+    primeClient({ available: 400 });
+
+    const outcome = await createModelRepository().upsertModels(
+      Array.from({ length: 100 }, (_, i) => makeModel({ id: `openai/m${i}` }))
+    );
+
+    expect(outcome.sweepSkipped).toBe(true);
+    expect(sweeps()).toEqual([]);
+  });
+
+  it('still upserts the models it did receive when the sweep is skipped', async () => {
+    primeClient({ available: 400 });
+
+    await createModelRepository().upsertModels([makeModel()]);
+
+    // Only retirement is deferred; the catalogue update is not.
+    expect(statements().some((s) => s.includes('INSERT INTO models'))).toBe(true);
+    expect(statements()).toContain('COMMIT');
+  });
+
+  it('runs the sweep when the response covers most of the catalogue', async () => {
+    primeClient({ available: 400 });
+
+    const outcome = await createModelRepository().upsertModels(
+      Array.from({ length: 390 }, (_, i) => makeModel({ id: `openai/m${i}` }))
+    );
+
+    expect(outcome.sweepSkipped).toBe(false);
+    expect(sweeps()).toHaveLength(1);
+  });
+
+  it('runs the sweep on a genuine large-but-plausible shrink', async () => {
+    // 340 -> 367 in the other direction: growth must never trip the guard.
+    primeClient({ available: 340 });
+
+    const outcome = await createModelRepository().upsertModels(
+      Array.from({ length: 367 }, (_, i) => makeModel({ id: `openai/m${i}` }))
+    );
+
+    expect(outcome.sweepSkipped).toBe(false);
+  });
+
+  it('does not trip the guard on an empty catalogue', async () => {
+    primeClient({ available: 0 });
+
+    const outcome = await createModelRepository().upsertModels([makeModel()]);
+
+    expect(outcome.sweepSkipped).toBe(false);
+  });
+
+  it('reads the baseline before any upsert', async () => {
+    primeClient({ available: 1 });
+
+    await createModelRepository().upsertModels([makeModel()]);
+
+    const order = statements();
+    const baseline = order.findIndex((s) => s.includes('SELECT COUNT(*)'));
+    const firstUpsert = order.findIndex((s) => s.includes('INSERT INTO models'));
+    // A model returning from retirement would otherwise inflate the baseline
+    // the guard compares against.
+    expect(baseline).toBeGreaterThan(-1);
+    expect(baseline).toBeLessThan(firstUpsert);
+  });
+
+  it('rolls back and rethrows when a statement fails', async () => {
+    mockClientQuery.mockReset();
+    mockClientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ count: '1' }] };
+      if (sql.includes('INSERT INTO models')) throw new Error('constraint violation');
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createModelRepository().upsertModels([makeModel()])).rejects.toThrow(
+      'constraint violation'
+    );
+    expect(statements()).toContain('ROLLBACK');
+    expect(statements()).not.toContain('COMMIT');
   });
 });

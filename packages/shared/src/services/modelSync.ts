@@ -2,8 +2,26 @@ import type { ModelProvider } from '../types/provider';
 import type { Model } from '../types/model';
 import { canonicalizeModelId, extractProvider } from './canonicalize';
 
+export interface UpsertOutcome {
+  /** Rows the retirement sweep marked unavailable in this sync. */
+  retired: number;
+  /**
+   * True when the sweep was skipped because the upstream response was too small
+   * to trust. The catalogue is still updated; only retirement is deferred.
+   */
+  sweepSkipped: boolean;
+}
+
+export interface SyncAttemptOutcome {
+  success: boolean;
+  error?: string;
+  count?: number;
+  /** Mirrors `UpsertOutcome.sweepSkipped` — the run completed, but not in full. */
+  partial?: boolean;
+}
+
 export interface ModelRepository {
-  upsertModels(models: Model[]): Promise<void>;
+  upsertModels(models: Model[]): Promise<UpsertOutcome>;
   /**
    * Open a sync-attempt record in the `running` state and return its id, so the
    * finaliser can update that same row. Returning `null` means the attempt could
@@ -12,12 +30,7 @@ export interface ModelRepository {
    */
   beginSyncAttempt(): Promise<number | null>;
   /** Close the attempt opened by `beginSyncAttempt`, in place. */
-  completeSyncAttempt(
-    attemptId: number | null,
-    success: boolean,
-    error?: string,
-    count?: number
-  ): Promise<void>;
+  completeSyncAttempt(attemptId: number | null, outcome: SyncAttemptOutcome): Promise<void>;
   acquireSyncLock(): Promise<boolean>;
   releaseSyncLock(): Promise<void>;
 }
@@ -31,6 +44,14 @@ export interface SyncResult {
   modelsUpserted: number;
   error?: string;
   skipped?: boolean;
+  /**
+   * The sync succeeded but the retirement sweep was skipped because the
+   * upstream response was too small to trust. Models absent from this response
+   * keep `isAvailable: true` until a full-looking sync confirms they are gone.
+   */
+  partial?: boolean;
+  /** Rows retired by this sync. Absent when the sweep was skipped. */
+  modelsRetired?: number;
 }
 
 export class ModelSyncService {
@@ -101,13 +122,21 @@ export class ModelSyncService {
         };
       });
 
-      await this.repository.upsertModels(models);
-      await this.repository.completeSyncAttempt(attemptId, true, undefined, models.length);
+      const upsert = await this.repository.upsertModels(models);
+      await this.repository.completeSyncAttempt(attemptId, {
+        success: true,
+        count: models.length,
+        partial: upsert.sweepSkipped,
+      });
 
-      return { success: true, modelsUpserted: models.length };
+      return {
+        success: true,
+        modelsUpserted: models.length,
+        ...(upsert.sweepSkipped ? { partial: true } : { modelsRetired: upsert.retired }),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.repository.completeSyncAttempt(attemptId, false, message);
+      await this.repository.completeSyncAttempt(attemptId, { success: false, error: message });
       return { success: false, modelsUpserted: 0, error: message };
     } finally {
       await this.repository.releaseSyncLock();
