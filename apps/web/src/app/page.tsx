@@ -41,7 +41,7 @@ export default function HomePage() {
         <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
           <strong style={{ color: 'var(--text)' }}>About this UI:</strong>{' '}
           The browser pages (Models, Resolve, Sync Status) query the registry database directly.
-          The <a href="/demo">Live Demo</a> chatbot is a full MCP client — it connects to{' '}
+          The <a href="/chat">Registry Chat</a> is a full MCP client — it connects to{' '}
           <code>{mcpUrl}/api/mcp</code> at runtime, discovers tools dynamically, and routes every
           tool call through the MCP server. To connect your own AI client, see the{' '}
           <a href="/mcp-info">MCP Integration</a> page.
@@ -71,11 +71,11 @@ export default function HomePage() {
           <Link href="/mcp-info">MCP Setup →</Link>
         </div>
         <div className="card">
-          <h3>💬 Live Demo</h3>
+          <h3>💬 Registry Chat</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
             Chat with an AI assistant that uses live MCP registry tools to search, compare, and resolve models.
           </p>
-          <Link href="/demo">Open Chatbot →</Link>
+          <Link href="/chat">Open Registry Chat →</Link>
         </div>
       </div>
 

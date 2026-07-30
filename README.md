@@ -4,7 +4,7 @@
 
 A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **browsable reference web application**. Designed for zero-config deployment on Vercel.
 
-> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`) powered by the MCP. The chatbot posts to an `apps/web` server route, which calls `apps/mcp` with server-side MCP client credentials; `apps/mcp` discovers/executes registry tools and owns the OpenRouter call. Browser-facing model/resolve pages call `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` does not own OpenRouter or Neon runtime access; it uses `apps/mcp` for chat, admin credential verification, model resolution, registry reads, sync, and embeddings. Only local/CI scripts in the web workspace need `POSTGRES_URL`. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
+> **What `apps/web` is:** A human-facing demo that includes **Registry Chat** (`/chat`), a live chatbot powered by the MCP. The chatbot posts to an `apps/web` server route, which calls `apps/mcp` with server-side MCP client credentials; `apps/mcp` discovers/executes registry tools and owns the OpenRouter call. Browser-facing model/resolve pages call `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` does not own OpenRouter or Neon runtime access; it uses `apps/mcp` for chat, admin credential verification, model resolution, registry reads, sync, and embeddings. Only local/CI scripts in the web workspace need `POSTGRES_URL`. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
 
 ## Why?
 
@@ -69,7 +69,7 @@ The two apps deploy to **two different origins**, and it matters which one you h
 | Host                          | Serves                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
 | **API host** (`apps/mcp`)     | `/api/mcp`, `/api/oauth/*`, `/.well-known/*`, `/api/cron/sync`, the REST API                |
-| **Docs host** (`apps/web`)    | `/mcp-info` (the integration reference), `/models`, `/demo`, `/admin`                        |
+| **Docs host** (`apps/web`)    | `/mcp-info` (the integration reference), `/models`, `/chat`, `/admin`                        |
 
 Each host redirects the other's paths instead of returning `404`, so a client handed the wrong URL still works:
 
@@ -291,7 +291,7 @@ In **Settings → Environment Variables**:
 | `POSTGRES_URL`        | ✅               | Neon pooled runtime connection string injected by Vercel Storage, or copied from Neon                            |
 | `ADMIN_SECRET`        | ✅               | Random secret for admin endpoints                                                                                |
 | `OAUTH_JWT_SECRET`    | ✅ in production | Signs short-lived JWT access tokens for `/api/mcp`. Generate with `openssl rand -hex 32`.                        |
-| `MCP_CLIENT_ID`       | ✅ for web demo  | Static OAuth client id shared with `apps/web` for the `/demo` chatbot                                            |
+| `MCP_CLIENT_ID`       | ✅ for web demo  | Static OAuth client id shared with `apps/web` for Registry Chat (`/chat`)                                        |
 | `MCP_CLIENT_SECRET`   | ✅ for web demo  | Static OAuth client secret shared with `apps/web`; server-side only                                              |
 | `NEXT_PUBLIC_MCP_URL` | ❌               | Public canonical MCP URL; set for custom domains, otherwise `VERCEL_URL` is used                                 |
 | `NEXT_PUBLIC_WEB_URL` | ❌               | Public URL of the docs host (`apps/web`). When set, `/mcp-info` 308-redirects there instead of 404ing            |
@@ -345,7 +345,7 @@ Rows written before this lifecycle existed are reconciled by `pnpm db:migrate`. 
 
 ### Project 2 — `apps/web` (optional demo UI + MCP-client chatbot)
 
-This is a human-facing browser for the registry. The **`/demo` chatbot** posts to an `apps/web` server route, which obtains a short-lived MCP bearer token with server-side `MCP_CLIENT_ID`/`MCP_CLIENT_SECRET` and delegates chat generation to `apps/mcp` `/api/chat`. Browser-facing registry reads go through `apps/web` route handlers that proxy to `apps/mcp`. `apps/web` does not need OpenRouter or Neon/Postgres credentials at Vercel runtime.
+This is a human-facing browser for the registry. **Registry Chat** (`/chat`) posts to an `apps/web` server route, which obtains a short-lived MCP bearer token with server-side `MCP_CLIENT_ID`/`MCP_CLIENT_SECRET` and delegates chat generation to `apps/mcp` `/api/chat`. Browser-facing registry reads go through `apps/web` route handlers that proxy to `apps/mcp`. `apps/web` does not need OpenRouter or Neon/Postgres credentials at Vercel runtime.
 
 #### 1. Create the Vercel project
 
@@ -380,6 +380,29 @@ ADMIN_BOOTSTRAP_PASSWORD=choose-a-strong-password pnpm db:create-admin -- --user
 
 This upserts an active admin row in the `admins` table. The web login no longer reads admin credentials from environment variables.
 
+#### GitHub sign-in for `/admin` (optional)
+
+The admin area accepts a GitHub account in addition to the username/password form. Both remain available: the password path is the bootstrap and the fallback, so a misconfigured OAuth app cannot lock you out.
+
+1. Create an OAuth app at <https://github.com/settings/developers>.
+2. Set **Authorization callback URL** to `https://<your-web-app>/api/admin/oauth/github/callback`.
+3. Set these on the `apps/web` project:
+
+| Variable | Description |
+| -------- | ----------- |
+| `GITHUB_CLIENT_ID` | OAuth app client id |
+| `GITHUB_CLIENT_SECRET` | OAuth app client secret — server-side only, never `NEXT_PUBLIC_*` |
+| `GITHUB_ADMIN_LOGINS` | Comma-separated GitHub logins allowed to administer, e.g. `tj60647,alice`. Case-insensitive |
+
+All three are required together. If any is missing the button is not rendered and the routes return `404` — and an **empty `GITHUB_ADMIN_LOGINS` means nobody, never everybody**.
+
+How it works: sign-in mints the same web-owned session cookie the password form does, with the GitHub login as the username, so `/admin` gating and the middleware are unchanged. No database is involved, which keeps the MCP-owned backend boundary intact. The requested scope is `read:user` only — enough to learn who is signing in, and not enough to act on the account.
+
+Two details worth knowing if you change this code:
+
+- The state and session cookies are `SameSite=Lax`, not `Strict`. GitHub returns the browser via a cross-site top-level navigation, and a `Strict` cookie is withheld on that request — the callback would find no state and refuse every sign-in. `Lax` still keeps cookies off cross-site POSTs, which is where CSRF matters.
+- The post-login destination is read from the state cookie set when sign-in began, not from the callback's query string, and is constrained to a path inside `/admin`. A protocol-relative `//evil.example` is a URL, not a local path, and is rejected.
+
 #### Rate limits
 
 Limits on `apps/mcp` are counted in the `rate_limits` Postgres table, so they hold **across serverless instances** and survive cold starts. Check and increment happen in one statement, so two concurrent instances cannot both see the same pre-increment count.
@@ -398,7 +421,7 @@ Every check runs **before** any secret comparison, so a credential cannot be bru
 
 The tool-call budgets are what bound an open-registration client: `semantic_search` gets a tighter one because it is the only tool that makes a paid outbound call. A throttled tool call returns an MCP error result without reaching the database or OpenRouter.
 
-`apps/web` keeps a small **in-memory** limiter in front of `/api/admin/login` (5 / 15 min) and `/api/chat` (20 / 1 min). That one is per-instance and resets on a cold start, by design: `apps/web` has no runtime database access (see the env boundary above), so it is a cheap first pass and the durable limit is the one on the `apps/mcp` endpoint it proxies to.
+`apps/web` keeps a small **in-memory** limiter in front of `/api/admin/login` (5 / 15 min), `/api/chat` (20 / 1 min) and `/api/admin/oauth/github/start` (20 / 15 min). That one is per-instance and resets on a cold start, by design: `apps/web` has no runtime database access (see the env boundary above), so it is a cheap first pass and the durable limit is the one on the `apps/mcp` endpoint it proxies to.
 
 Requests that exceed a limit receive `429 Too Many Requests`. If the `rate_limits` table is missing — migrations not yet run — limiting fails **open** and logs `rate_limits table is missing` at error level, rather than taking every endpoint down at once.
 
