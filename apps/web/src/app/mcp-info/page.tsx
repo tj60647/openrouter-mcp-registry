@@ -1288,8 +1288,10 @@ const result = await mcp.callTool('resolve_model', { input: 'anthropic/claude-so
             <code>status: &quot;running&quot;</code> (<code>success: null</code>) before OpenRouter
             is contacted and updated in place when the attempt ends, so a{' '}
             <code>success: false</code> row is always a genuine failure and always carries an{' '}
-            <code>error</code>. Rows written before this fix show as <code>running</code> when they
-            were start markers.
+            <code>error</code>. The old writer emitted two rows per sync; the migration removed
+            each start marker that was paired with a completed row, so history reads one row per
+            attempt throughout. An <em>unpaired</em> marker survives as <code>running</code>, which
+            for that row is accurate.
           </li>
           <li>
             After a successful sync, embeddings are generated for any models that gained a
