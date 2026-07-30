@@ -205,8 +205,8 @@ Reusable reasoning templates accessible via `prompts/get`:
 
 ### Prerequisites
 
-- Node.js ≥ 20
-- pnpm ≥ 9 (`npm install -g pnpm`)
+- Node.js ≥ 22.13 — required by the pinned pnpm, which loads `node:sqlite`
+- pnpm 11.17.0, pinned via the root `packageManager` field. With corepack enabled (`corepack enable`) the right version is used automatically; otherwise `npm install -g pnpm@11.17.0`
 - A [Neon](https://neon.tech) or local Postgres database (Vercel provisions Neon automatically on deploy)
 - An [OpenRouter](https://openrouter.ai) API key
 
@@ -248,8 +248,10 @@ pnpm dev
 | `pnpm dev`        | Start all apps in parallel  |
 | `pnpm build`      | Build both Next.js apps. `packages/shared` has no build step: it is consumed as TypeScript source through `transpilePackages`, and its `exports` point at `./src/index.ts` |
 | `pnpm test`       | Run all tests               |
+| `pnpm test:coverage` | Run all tests with coverage thresholds enforced |
 | `pnpm typecheck`  | TypeScript type check       |
 | `pnpm lint`       | Lint all packages           |
+| `pnpm ci`         | Everything CI runs, in CI's order: lint → typecheck → test → build |
 | `pnpm db:migrate` | Run database migrations     |
 | `pnpm db:seed`    | Seed demo models            |
 
@@ -335,7 +337,7 @@ pnpm db:seed
 
 Each sync writes **one** `sync_history` row. It is opened with `status = 'running'` (`success: null`) before OpenRouter is contacted and updated in place when the attempt ends, so a `success: false` row is always a genuine failure and always carries an `error`. `synced_at` is the attempt's start and `finished_at` its end (`null` while running); a `running` row older than the newest finished row is an attempt whose process died mid-sync. `partial: true` marks a run that updated the catalogue but skipped the retirement sweep because the upstream response looked truncated.
 
-Rows written before this lifecycle existed are backfilled by `pnpm db:migrate`: old start markers become `running` rather than being counted as outages.
+Rows written before this lifecycle existed are reconciled by `pnpm db:migrate`. The old writer emitted two rows per sync, so a start marker that is paired with a completed row is removed as the duplicate it is; only an *unpaired* marker survives, as `running`, which for that row is accurate. Everything else is classified from its `success` flag.
 
 > **Note:** You must set `CRON_SECRET` yourself — Vercel does **not** create it automatically (the Neon integration does not provide it). In production the cron route returns `503` ("Cron auth not configured") when the secret is missing and `NODE_ENV=production`, so the job fails on every run until you set it. Generate one with `openssl rand -hex 32`, add it to the project's Production environment, and redeploy so the new deployment picks it up.
 
@@ -380,15 +382,25 @@ This upserts an active admin row in the `admins` table. The web login no longer 
 
 #### Rate limits
 
-The following server-side limits are enforced per-IP (per Vercel function instance):
+Limits on `apps/mcp` are counted in the `rate_limits` Postgres table, so they hold **across serverless instances** and survive cold starts. Check and increment happen in one statement, so two concurrent instances cannot both see the same pre-increment count.
 
-| Endpoint                | Limit        | Window     |
-| ----------------------- | ------------ | ---------- |
-| `POST /api/admin/login` | 5 requests   | 15 minutes |
-| `POST /api/chat`        | 20 requests  | 1 minute   |
-| `POST /api/mcp`         | 120 requests | 1 minute   |
+| Endpoint / surface                     | Limit | Window | Keyed on |
+| -------------------------------------- | ----- | ------ | -------- |
+| `POST /api/oauth/register`             | 5     | 15 min | IP |
+| `GET`/`DELETE /api/oauth/register/{id}`| 30    | 15 min | IP |
+| `GET /api/oauth/authorize`             | 30    | 15 min | IP |
+| `POST /api/oauth/token`                | 20    | 1 min  | IP |
+| `POST /api/admin/verify-login`         | 10    | 15 min | username **and** IP |
+| MCP tool calls (`/api/mcp`)            | 600   | 1 min  | OAuth client |
+| `semantic_search` specifically         | 60    | 1 min  | OAuth client |
 
-Requests that exceed the limit receive a `429 Too Many Requests` response.
+Every check runs **before** any secret comparison, so a credential cannot be brute-forced through the limiter's own timing. `verify-login` is keyed on username *and* source address: username alone would let anyone lock an administrator out of a durable counter they could not clear. A correct password clears that counter.
+
+The tool-call budgets are what bound an open-registration client: `semantic_search` gets a tighter one because it is the only tool that makes a paid outbound call. A throttled tool call returns an MCP error result without reaching the database or OpenRouter.
+
+`apps/web` keeps a small **in-memory** limiter in front of `/api/admin/login` (5 / 15 min) and `/api/chat` (20 / 1 min). That one is per-instance and resets on a cold start, by design: `apps/web` has no runtime database access (see the env boundary above), so it is a cheap first pass and the durable limit is the one on the `apps/mcp` endpoint it proxies to.
+
+Requests that exceed a limit receive `429 Too Many Requests`. If the `rate_limits` table is missing — migrations not yet run — limiting fails **open** and logs `rate_limits table is missing` at error level, rather than taking every endpoint down at once.
 
 ---
 
@@ -721,9 +733,35 @@ CREATE TABLE sync_status (
   last_error           TEXT,
   record_count         INTEGER NOT NULL DEFAULT 0
 );
+
+-- One row per sync ATTEMPT, opened when it starts and updated in place when it
+-- ends. `status` is nullable with no default ON PURPOSE: every current writer
+-- sets it explicitly, so a default would only ever be applied to a row written
+-- by an older build, and stamping those 'running' would report a completed sync
+-- as one whose process died.
+CREATE TABLE sync_history (
+  id           BIGSERIAL PRIMARY KEY,
+  synced_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- attempt start
+  status       TEXT,                                -- running | success | failure
+  success      BOOLEAN,                             -- NULL while running
+  record_count INTEGER,
+  error        TEXT,                                -- always set on a failure
+  finished_at  TIMESTAMPTZ,                         -- NULL while running
+  partial      BOOLEAN NOT NULL DEFAULT FALSE       -- retirement sweep was skipped
+);
+
+-- Shared rate-limit counters. In Postgres rather than process memory so a limit
+-- is enforced across serverless instances instead of per warm lambda.
+CREATE TABLE rate_limits (
+  key          TEXT PRIMARY KEY,
+  window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  count        INTEGER NOT NULL DEFAULT 0
+);
 ```
 
-`pnpm db:migrate` also creates and backfills the model lifecycle columns (`provider_expiration_at`, `last_seen_at`, `retired_at`, `is_available`), the `sync_history` and `admins` tables, and the `oauth_clients` table — including `revoked_at` and `registration_access_token_hash` (the SHA-256 hash of the RFC 7592 management token; `NULL` for clients registered before that endpoint existed). The script is a single idempotent run of `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it is safe to re-run.
+`pnpm db:migrate` also creates and backfills the model lifecycle columns (`provider_expiration_at`, `last_seen_at`, `retired_at`, `is_available`), the `admins` table, and the `oauth_clients` table — including `revoked_at` and `registration_access_token_hash` (the SHA-256 hash of the RFC 7592 management token; `NULL` for clients registered before that endpoint existed). The script is a single idempotent run of `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it is safe to re-run.
+
+It contains **one destructive statement** — the removal of paired legacy `sync_history` start markers — and snapshots the table into `sync_history_pre_lifecycle_backup` before running it. See [Run database migrations](#4-run-database-migrations) for the restore. Drop that backup table once you are satisfied with the migrated history.
 
 ---
 
@@ -744,17 +782,35 @@ CREATE TABLE sync_status (
 # Run all tests
 pnpm test
 
+# Run with coverage thresholds enforced (what CI runs)
+pnpm test:coverage
+
 # Run tests for a specific package
 pnpm --filter @openrouter-mcp/shared test
 pnpm --filter @openrouter-mcp/mcp test
 ```
 
+**598 tests across 26 files** — 337 in `apps/mcp`, 194 in `packages/shared`, 67 in `apps/web`.
+
 Tests cover:
 
-- Model ID canonicalization
-- Model registry resolution logic
-- Sync service (success, lock contention, provider errors)
-- Auth guards (admin token, OAuth token/client credentials, MCP token)
+- Model ID canonicalization, and the registry's resolution logic
+- Sync service: the attempt lifecycle (one row per attempt), lock contention, provider errors, partial runs
+- The repository layer: query construction, the retirement sweep, and its volume guard
+- Zod tool schemas, parsed the way the wire protocol does — every numeric bound asserted at the boundary and one past it
+- Validation schemas, and the OpenRouter provider's defensive mapping of wrong-typed upstream fields
+- Auth guards (admin token, OAuth token/client credentials, MCP token), dynamic registration and RFC 7592 management
+- Rate limiting: the decision boundary, single-statement atomicity, and fail-closed behaviour
+- Route handlers — health, resolve, chat, admin login, `.well-known` — imported directly rather than re-implemented in the test
+- The admin middleware, including that a token signed with a *different* secret is rejected
+
+Coverage thresholds are set per workspace at the current floor and enforced by `pnpm test:coverage`. They are meant to be ratcheted upward as gaps close; lowering one to make a build pass defeats the point.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs install → lint → typecheck → test (with coverage) → build on every pull request and every push to `main`. The job is named `verify` and is a **required status check** on `main`.
+
+The job name is the status-check context that branch protection matches by string, so renaming it silently detaches the gate. Note also that the runner needs Node ≥ 22.13: the pinned pnpm loads `node:sqlite` and cannot start on Node 20.
 
 ---
 
@@ -836,8 +892,11 @@ Tests cover:
 
 1. Fork the repository
 2. Create a feature branch
-3. Run `pnpm typecheck && pnpm test` before submitting
-4. Open a pull request
+3. Run `pnpm ci` before submitting — it runs lint, typecheck, tests with coverage
+   thresholds, and both builds, in the same order CI does
+4. Open a pull request. The `verify` check is required on `main`
+
+Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
