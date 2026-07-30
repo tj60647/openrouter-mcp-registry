@@ -22,14 +22,23 @@ const nextConfig: NextConfig = {
    * has no `/.well-known` routes at all, so the catch-all shadows nothing.
    */
   async redirects() {
+    /**
+     * `/demo` was renamed to `/chat`. This one is unconditional — it is a
+     * same-origin rename, nothing to do with the API host — so it must sit
+     * outside the `mcpUrl` guard below or it would disappear in single-host
+     * local dev, which is exactly where old bookmarks get used.
+     */
+    const legacy = [{ source: '/demo', destination: '/chat', permanent: true }];
+
     const mcpUrl = process.env['NEXT_PUBLIC_MCP_URL']?.replace(/\/+$/, '');
 
-    // Unset or empty means single-host / local dev: emit no redirects at all.
+    // Unset or empty means single-host / local dev: emit no API-host redirects.
     if (!mcpUrl) {
-      return [];
+      return legacy;
     }
 
     return [
+      ...legacy,
       { source: '/api/mcp', destination: `${mcpUrl}/api/mcp`, permanent: true },
       { source: '/api/mcp/:path*', destination: `${mcpUrl}/api/mcp/:path*`, permanent: true },
       { source: '/api/oauth/:path*', destination: `${mcpUrl}/api/oauth/:path*`, permanent: true },
