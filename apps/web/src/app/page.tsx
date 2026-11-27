@@ -17,6 +17,8 @@ flowchart LR
   Clients["AI clients / coding agents"]
 
   WebApp -->|REST proxy| McpApp
+  WebApp -->|chat tools: MCP, the visitor's token| McpApp
+  WebApp -->|the chat's own model| OpenRouter
   McpApp <--> Database
   Clients -->|MCP / REST| McpApp
   Cron -->|fetch catalog| OpenRouter

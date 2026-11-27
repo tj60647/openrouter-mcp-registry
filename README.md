@@ -4,7 +4,7 @@
 
 A production-ready monorepo that provides a **centralized MCP model registry** backed by OpenRouter, plus a **browsable reference web application**. Designed for zero-config deployment on Vercel.
 
-> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`) powered by the MCP. The chatbot is an ordinary client of `apps/mcp`: a visitor signs in through it (WorkOS, open to the addresses on `ALLOWED_EMAILS`), and each message goes to `apps/mcp` with the visitor's own token; `apps/mcp` discovers/executes registry tools and owns the OpenRouter call. Browser-facing model/resolve pages call `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` does not own OpenRouter or Neon runtime access; it uses `apps/mcp` for chat, admin credential verification, model resolution, registry reads, sync, and embeddings. Only local/CI scripts in the web workspace need `POSTGRES_URL`. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
+> **What `apps/web` is:** A human-facing demo that includes a live chatbot (`/demo`), and that chatbot is an ordinary client of the MCP server, as Claude or Cursor are. It brings its own model (OpenRouter, on this site's own `OPENROUTER_API_KEY`) and reaches the registry only through `apps/mcp`'s `/api/mcp`, listing and calling its tools with the signed-in visitor's own token: a visitor signs in through `apps/mcp` (WorkOS, open to the addresses on `ALLOWED_EMAILS`). Browser-facing model/resolve pages call `apps/web` route handlers that proxy to `apps/mcp`; `apps/web` holds no Neon runtime access, and uses `apps/mcp` for admin credential verification, model resolution, registry reads, sync, and embeddings. Only local/CI scripts in the web workspace need `POSTGRES_URL`. For external MCP client setup (Claude Desktop, Copilot, Codex), see [MCP Client Setup](#mcp-client-setup).
 
 ## Why?
 
@@ -43,8 +43,9 @@ graph TD
     shared -.->|shared code| mcpApp
     shared -.->|shared code| webApp
     mcpApp --> db
-    webApp -->|MCP Streamable HTTP /api/mcp| mcpApp
+    webApp -->|MCP Streamable HTTP /api/mcp, the visitor's token| mcpApp
     webApp -->|server-side proxy with MCP client credentials| mcpApp
+    webApp -->|the chat's own model, its own key| openrouter
     cron -->|daily sync| openrouter
 ```
 
@@ -82,7 +83,7 @@ Both redirect sets live in the apps' `next.config.ts`, are emitted only when the
 
 ## REST API
 
-Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and runtime owner of OpenRouter, Neon/Postgres, registry data, provider/model resolution, embeddings, sync jobs, MCP auth validation, admin mutations, and cron endpoints. **`apps/web`** exposes browser-facing route handlers that proxy to `apps/mcp` and stores only optional web-owned admin session cookies; it does not require `OPENROUTER_API_KEY` or `POSTGRES_URL` at Vercel runtime.
+Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and runtime owner of Neon/Postgres, OpenRouter for the registry's own work (model sync and embeddings), registry data, provider/model resolution, embeddings, sync jobs, MCP auth validation, admin mutations, and cron endpoints. **`apps/web`** exposes browser-facing route handlers that proxy to `apps/mcp` and stores only optional web-owned admin session cookies; it does not require `POSTGRES_URL` at Vercel runtime. Its one model key, `OPENROUTER_API_KEY`, pays for the chat demo's own model, as any MCP client's would.
 
 ### `apps/mcp` routes (full API)
 
@@ -108,7 +109,6 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `DELETE` | `/api/oauth/register/{client_id}` | Delete (revoke) a client's own registration; returns `204` |
 | `GET`  | `/.well-known/oauth-authorization-server` | OAuth Authorization Server metadata (RFC 8414) |
 | `GET`  | `/.well-known/oauth-protected-resource` | OAuth Protected Resource metadata (RFC 9728)  |
-| `GET`/`POST` | `/api/chat`        | MCP-owned demo chat endpoint; owns OpenRouter call and registry tool execution. For signed-in people only: a service client's token is refused, and the registry's tools are called with the person's own token |
 
 ### `apps/web` routes (demo UI)
 
@@ -118,8 +118,8 @@ Both apps expose REST routes, but **`apps/mcp`** is the canonical backend and ru
 | `GET`  | `/api/providers`     | List distinct provider names                                                                                                                             |
 | `POST` | `/api/resolve`       | Resolve model ID → canonical model                                                                                                                       |
 | `GET`  | `/api/health`        | Health check. Proxies the MCP host and passes its status through; `503` when that host is unreachable                                                     |
-| `GET`  | `/api/chat`          | Agent config — default model, available models, and MCP tools list (the live list once signed in, the defaults before)                                    |
-| `POST` | `/api/chat`          | Chatbot proxy — browser posts here; sends the message to `apps/mcp` with the visitor's own token, or answers `401 sign_in_required`                       |
+| `GET`  | `/api/chat`          | Agent config — default model, available models, and the registry's tools, listed through `/api/mcp` with the visitor's token once signed in; the defaults before |
+| `POST` | `/api/chat`          | The chat: runs the demo's own model on OpenRouter (`OPENROUTER_API_KEY`), calling the registry's tools through `/api/mcp` with the visitor's own token; `401 sign_in_required` when not signed in |
 | `GET`  | `/api/sign-in/start` | Start signing in to the chat: authorization code + PKCE at `apps/mcp`, as client `MCP_OAUTH_CLIENT_ID`                                                     |
 | `GET`  | `/api/sign-in/callback` | Where `apps/mcp` returns; exchanges the code and keeps the visitor's tokens in an encrypted, HttpOnly cookie                                          |
 | `GET`  | `/api/sign-in/session` | Whether the visitor is signed in, and as whom                                                                                                         |
@@ -356,7 +356,7 @@ Rows written before this lifecycle existed are reconciled by `pnpm db:migrate`. 
 
 ### Project 2 — `apps/web` (optional demo UI + MCP-client chatbot)
 
-This is a human-facing browser for the registry. The **`/demo` chatbot** is registered with `apps/mcp` as an ordinary public client (`MCP_OAUTH_CLIENT_ID`): a visitor signs in through `apps/mcp` (WorkOS, `ALLOWED_EMAILS`), the visitor's own tokens are kept in an encrypted cookie, and each message goes to `apps/mcp` `/api/chat` with them. To register it, once: `curl -X POST https://<mcp host>/api/oauth/register -H 'Content-Type: application/json' -d '{"client_name":"Registry Chat","redirect_uris":["https://<web host>/api/sign-in/callback"]}'`, and set the `client_id` it returns as `MCP_OAUTH_CLIENT_ID`. Browser-facing registry reads go through `apps/web` route handlers that proxy to `apps/mcp`. `apps/web` does not need OpenRouter or Neon/Postgres credentials at Vercel runtime.
+This is a human-facing browser for the registry. The **`/demo` chatbot** is registered with `apps/mcp` as an ordinary public client (`MCP_OAUTH_CLIENT_ID`): a visitor signs in through `apps/mcp` (WorkOS, `ALLOWED_EMAILS`), the visitor's own tokens are kept in an encrypted cookie, and the chat runs its own model (this site's `OPENROUTER_API_KEY`), calling the registry's tools through `/api/mcp` with them, as any MCP client does. To register it, once: `curl -X POST https://<mcp host>/api/oauth/register -H 'Content-Type: application/json' -d '{"client_name":"Registry Chat","redirect_uris":["https://<web host>/api/sign-in/callback"]}'`, and set the `client_id` it returns as `MCP_OAUTH_CLIENT_ID`. Browser-facing registry reads go through `apps/web` route handlers that proxy to `apps/mcp`. `apps/web` does not need OpenRouter or Neon/Postgres credentials at Vercel runtime.
 
 #### 1. Create the Vercel project
 
@@ -381,7 +381,7 @@ This is a human-facing browser for the registry. The **`/demo` chatbot** is regi
 | `MCP_URL`              | ❌                 | Server-side MCP URL override; use for local dev (`http://localhost:3001`) or private/internal routing                                           |
 | `CHAT_MODEL`           | ❌                 | Default chat model id forwarded to `apps/mcp` (default: `google/gemini-3.5-flash`). Must match `provider/model-name`.                          |
 
-Do not set `OPENROUTER_API_KEY`, `POSTGRES_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET` on the `apps/web` Vercel runtime.
+Do not set `POSTGRES_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET` on the `apps/web` Vercel runtime. Its `OPENROUTER_API_KEY` is a key of its own (for the chat's model), never the MCP server's.
 
 #### 4. Bootstrap the first web admin
 
@@ -843,7 +843,8 @@ The job name is the status-check context that branch protection matches by strin
 | `MCP_CLIENT_ID` | ❌ locally | Server-side client id for protected MCP calls. May be omitted when local `apps/mcp` has no `OAUTH_JWT_SECRET`. |
 | `MCP_CLIENT_SECRET` | ❌ locally | Server-side client secret for protected MCP calls. May be omitted when local `apps/mcp` has no `OAUTH_JWT_SECRET`. |
 | `ADMIN_SESSION_SECRET` | ✅ for web admin UI | Signs web-owned admin session cookies only. |
-| `CHAT_MODEL` | ❌ | Chat model id passed through to `apps/mcp` `/api/chat`. |
+| `CHAT_MODEL` | ❌ | The chat's default model id. |
+| `OPENROUTER_API_KEY` | ✅ for the chat | A key of its own for the chat's model. |
 
 ### `apps/web` Vercel preview/prod
 
@@ -855,16 +856,17 @@ The job name is the status-check context that branch protection matches by strin
 | `MCP_CLIENT_SECRET` | ✅ | Server-side OAuth client secret used only by web route handlers. Never expose to client components. |
 | `ADMIN_SESSION_SECRET` | ✅ if web admin UI is enabled | Signs web-owned admin session cookies. |
 | `MCP_URL` | ❌ | Optional server-side override for `NEXT_PUBLIC_MCP_URL`. |
-| `CHAT_MODEL` | ❌ | Optional default chat model id forwarded to `apps/mcp`. |
+| `CHAT_MODEL` | ❌ | Optional default chat model id. |
+| `OPENROUTER_API_KEY` | ✅ for the chat | The chat's own OpenRouter key (`aroughidea-openrouter-mcp-registry-web-prod`), separate from the MCP server's. |
 
-`apps/web` Vercel runtime does **not** require `OPENROUTER_API_KEY`, `POSTGRES_URL`, `DATABASE_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET`.
+`apps/web` Vercel runtime does **not** require `POSTGRES_URL`, `DATABASE_URL`, `ADMIN_SECRET`, `OAUTH_JWT_SECRET`, or `CRON_SECRET`.
 
 ### `apps/mcp` local
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `POSTGRES_URL` | ✅ | Neon/Postgres connection string for registry/admin data. Use a local/dev database. |
-| `OPENROUTER_API_KEY` | ✅ for sync/chat/embeddings | OpenRouter API key used by MCP-owned sync, embeddings, and chat. |
+| `OPENROUTER_API_KEY` | ✅ for sync/embeddings | OpenRouter API key used by MCP-owned sync and embeddings. |
 | `ADMIN_SECRET` | ✅ for admin endpoints | Server-side bearer token for MCP admin endpoints. |
 | `OAUTH_JWT_SECRET` | ❌ locally | Leave unset for simple local anonymous MCP access; set it to test fail-closed OAuth. |
 | `MCP_CLIENT_ID` | ✅ when OAuth is enabled | Static client id for server-to-server clients. |
@@ -880,7 +882,7 @@ The job name is the status-check context that branch protection matches by strin
 | Variable | Required | Description |
 | --- | --- | --- |
 | `POSTGRES_URL` | ✅ | Neon/Postgres connection string. Preview deployments should use a Neon preview/dev branch, not the production branch. |
-| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key; `apps/mcp` is the only runtime owner. |
+| `OPENROUTER_API_KEY` | ✅ | OpenRouter API key for the registry's sync and embeddings (`aroughidea-openrouter-mcp-registry-mcp-prod`). The chat demo has its own, on `apps/web`. |
 | `OAUTH_JWT_SECRET` | ✅ | Signs short-lived OAuth/JWT access tokens. Production MCP access fails closed without it. |
 | `MCP_CLIENT_ID` | ✅ for web demo/proxies | Static OAuth client id shared with `apps/web` server-side env. |
 | `MCP_CLIENT_SECRET` | ✅ for web demo/proxies | Static OAuth client secret shared with `apps/web` server-side env. |

@@ -9,7 +9,8 @@ any model for those signed in.
 No migration. New settings, without which production refuses every client
 (apps/mcp) or the chat stays closed (apps/web): `WORKOS_CLIENT_ID`,
 `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` and `ALLOWED_EMAILS` on apps/mcp;
-`MCP_OAUTH_CLIENT_ID` and `CHAT_SESSION_SECRET` on apps/web.
+`MCP_OAUTH_CLIENT_ID`, `CHAT_SESSION_SECRET` and the chat's own
+`OPENROUTER_API_KEY` on apps/web.
 
 ### Behaviour changes
 
@@ -27,12 +28,18 @@ No migration. New settings, without which production refuses every client
 - **Registering a service client needs `OAUTH_REGISTRATION_ACCESS_TOKEN`**, and
   is refused while it is unset: a service client never meets the sign-in.
   Interactive clients may still register freely.
-- **The chat (`/api/chat`) is for people only**: a service client's token is
-  refused, and the chat calls the registry's tools with the person's own token.
+- **The chat moved into the demo, which owns its model** (TJ: "the intention
+  of the demo is to be a demo of the MCP … rework 38 so the demo owns its
+  model"). apps/mcp's `/api/chat` is removed; the MCP server now pays only for
+  its own sync and embeddings. The demo runs its model on its own
+  `OPENROUTER_API_KEY` and calls the registry's tools through `/api/mcp` with
+  the visitor's token, as Claude or Cursor would. Removes: apps/mcp
+  `GET`/`POST /api/chat`, and apps/mcp's `ai` and `@ai-sdk/openai` dependencies.
 - **The web demo is an ordinary client**: it signs the visitor in through
   apps/mcp (authorization code + PKCE, public client `MCP_OAUTH_CLIENT_ID`),
-  keeps their tokens in an encrypted HttpOnly cookie, refreshes them, and sends
-  each message with them. It no longer uses `MCP_CLIENT_ID` for the chat.
+  keeps their tokens in an encrypted HttpOnly cookie, refreshes them, and uses
+  them for every call to the registry. It no longer uses `MCP_CLIENT_ID` for
+  the chat.
 
 ## 2026-07-30 — External review remediation
 
