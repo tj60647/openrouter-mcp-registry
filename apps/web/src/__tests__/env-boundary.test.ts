@@ -10,6 +10,8 @@ const SECRET_NAMES = [
   'OAUTH_JWT_SECRET',
   'ADMIN_SECRET',
   'CRON_SECRET',
+  'CHAT_SESSION_SECRET',
+  'WORKOS_API_KEY',
 ];
 
 function sourceFiles(dir: string): string[] {

@@ -712,9 +712,88 @@ function ToolCallBlock({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) 
   );
 }
 
+// ── Sign-in (lib/chatSignIn.ts) ───────────────────────────────────────────────
+// The chat runs a model of the visitor's choosing on the registry's OpenRouter key, so the registry
+// lets in only the people its owner has listed. The visitor signs in through the MCP server, as any
+// other client does, with WorkOS.
+
+interface SignInState {
+  configured: boolean;
+  signedIn: boolean;
+  person: string | null;
+}
+
+const SIGN_IN_PROBLEMS: Record<string, string> = {
+  expired: 'That sign-in expired before it finished. Sign in again.',
+  refused: 'The sign-in was not completed. If your address is not on the registry’s list, ask its owner to add it.',
+  failed: 'The sign-in could not be finished. Try again in a moment.',
+  not_set_up: 'Sign-in for the chat is not set up yet.',
+};
+
+function SignInBar({ signIn, problem, onSignOut }: { signIn: SignInState | null; problem: string | null; onSignOut: () => void }) {
+  if (!signIn) return null;
+  const box: React.CSSProperties = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '0.5rem 1rem',
+    border: '1px solid var(--border)',
+    padding: '0.5rem 0.75rem',
+    fontSize: '0.85rem',
+  };
+  if (!signIn.configured) {
+    return <div style={box}>Sign-in for the chat is not set up yet, so the chat is closed.</div>;
+  }
+  if (signIn.signedIn) {
+    return (
+      <div style={box}>
+        <span style={{ color: 'var(--text-muted)' }}>Signed in{signIn.person ? ` as ${signIn.person}` : ''}.</span>
+        <button type="button" onClick={onSignOut} title="Forget your sign-in on this browser. You can sign in again at any time.">
+          Sign Out
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={box}>
+      <span>
+        {problem ? `${problem} ` : ''}
+        The chat runs on the registry’s own account, so it is open to the people its owner has listed. Sign in to chat.
+      </span>
+      <a className="btn-ghost" href="/api/sign-in/start?return=/demo" title="Sign in with WorkOS. Only addresses on the registry’s list are let in.">
+        Sign In
+      </a>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DemoPage() {
+  const [signIn, setSignIn] = useState<SignInState | null>(null);
+  const [signInProblem, setSignInProblem] = useState<string | null>(null);
+  const loadSignIn = useCallback(() => {
+    fetch('/api/sign-in/session', { cache: 'no-store' })
+      .then(async (r) => (await r.json()) as SignInState)
+      .then(setSignIn)
+      .catch(() => setSignIn({ configured: true, signedIn: false, person: null }));
+  }, []);
+  useEffect(() => {
+    loadSignIn();
+    const params = new URLSearchParams(window.location.search);
+    const problem = params.get('sign_in');
+    if (problem) {
+      setSignInProblem(SIGN_IN_PROBLEMS[problem] ?? SIGN_IN_PROBLEMS['failed']!);
+      params.delete('sign_in');
+      const query = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+    }
+  }, [loadSignIn]);
+  const signOut = useCallback(() => {
+    fetch('/api/sign-in/out', { method: 'POST' }).finally(loadSignIn);
+  }, [loadSignIn]);
+
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [temperature, setTemperature] = useState(0);
@@ -745,6 +824,12 @@ export default function DemoPage() {
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const loading = status === 'submitted' || status === 'streaming';
+  const canChat = signIn?.signedIn === true;
+
+  // A refusal from the chat means the sign-in lapsed (or the visitor was taken off the list).
+  useEffect(() => {
+    if (error && /sign_in_required|Sign in to chat/.test(error.message)) loadSignIn();
+  }, [error, loadSignIn]);
 
   // ── Persisted chat sessions (localStorage) ──────────────────────────────────
   const [sessions, setSessions] = useState<StoredSession[]>([]);
@@ -844,7 +929,7 @@ export default function DemoPage() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !canChat) return;
     void sendMessage({ text }, { body: chatBody });
     setInput('');
   }
@@ -870,6 +955,8 @@ export default function DemoPage() {
   // 6.75rem === 44px sticky nav + 2rem top/bottom main padding.
   return (
     <div className="stack" style={{ height: 'calc(100vh - 6.75rem)', maxHeight: 900 }}>
+      <SignInBar signIn={signIn} problem={signInProblem} onSignOut={signOut} />
+
       {/* Page header */}
       <div
         style={{
@@ -1179,7 +1266,11 @@ export default function DemoPage() {
                 );
               })}
 
-              {error && <div className="error-msg">{error.message}</div>}
+              {error && (
+                <div className="error-msg">
+                  {/sign_in_required|Sign in to chat/.test(error.message) ? 'Your sign-in has lapsed. Sign in again to keep chatting.' : error.message}
+                </div>
+              )}
 
               <div ref={bottomRef} />
             </div>
@@ -1227,9 +1318,9 @@ export default function DemoPage() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about models, pricing, context windows…"
+              placeholder={canChat ? 'Ask about models, pricing, context windows…' : 'Sign in to chat.'}
               rows={2}
-              disabled={loading}
+              disabled={loading || !canChat}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -1243,7 +1334,7 @@ export default function DemoPage() {
                 ■ Stop
               </button>
             ) : (
-              <button type="submit" disabled={!input.trim()} style={{ flexShrink: 0 }}>
+              <button type="submit" disabled={!input.trim() || !canChat} style={{ flexShrink: 0 }}>
                 Send
               </button>
             )}

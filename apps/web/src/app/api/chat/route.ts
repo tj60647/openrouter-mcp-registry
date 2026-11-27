@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { checkRateLimit } from '../../../lib/rateLimit';
-import { getMcpAuthHeaders, getMcpBaseUrl } from '../../../lib/mcpAuth';
+import { getMcpBaseUrl } from '../../../lib/mcpAuth';
+import { CHAT_COOKIE, chatSignInSettings, cookieFrom, currentAccessToken, isConfigured } from '../../../lib/chatSignIn';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,15 +60,27 @@ const FALLBACK_MODELS = [
   'meta-llama/llama-3.3-70b-instruct',
 ] as const;
 
+// ── The visitor's own token (lib/chatSignIn.ts) ──────────────────────────────
+// The chat is apps/mcp's, and apps/mcp lets only people who signed in use it. This app is one of
+// its clients: each message goes with the visitor's own token, never a service credential.
+
+async function visitorToken(req: Request): Promise<{ access: string; setCookie?: string } | null> {
+  const settings = chatSignInSettings();
+  if (!isConfigured(settings)) return null;
+  return currentAccessToken(settings, cookieFrom(req.headers.get('cookie'), CHAT_COOKIE));
+}
+
+const signInRequired = () =>
+  Response.json({ error: 'Sign in to chat.', code: 'sign_in_required' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
+
 // ── MCP proxy helpers ─────────────────────────────────────────────────────────
 
-async function proxyMcpChatConfig(): Promise<Response | null> {
+async function proxyMcpChatConfig(access: string): Promise<Response | null> {
   const mcpUrl = getMcpBaseUrl();
   if (!mcpUrl) return null;
 
   try {
-    const headers = await getMcpAuthHeaders(mcpUrl);
-    const res = await fetch(`${mcpUrl}/api/chat`, { headers });
+    const res = await fetch(`${mcpUrl}/api/chat`, { headers: { Authorization: `Bearer ${access}` } });
     if (!res.ok) return null;
     const data: unknown = await res.json();
     return Response.json(data, { status: res.status });
@@ -78,9 +91,14 @@ async function proxyMcpChatConfig(): Promise<Response | null> {
 
 // ── GET – agent config ────────────────────────────────────────────────────────
 
-export async function GET(): Promise<Response> {
-  const proxied = await proxyMcpChatConfig();
-  if (proxied) return proxied;
+export async function GET(req: Request): Promise<Response> {
+  // Signed out, the page still shows the agent's defaults; signed in, apps/mcp's live list.
+  const visitor = await visitorToken(req);
+  const proxied = visitor ? await proxyMcpChatConfig(visitor.access) : null;
+  if (proxied) {
+    if (visitor?.setCookie) proxied.headers.append('Set-Cookie', visitor.setCookie);
+    return proxied;
+  }
 
   return Response.json({
     model: CHAT_MODEL,
@@ -181,18 +199,13 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  let authHeaders: Record<string, string>;
-  try {
-    authHeaders = await getMcpAuthHeaders(mcpUrl);
-  } catch (err) {
-    console.error('[chat/route] MCP auth failed:', err instanceof Error ? err.message : err);
-    return Response.json({ error: 'Failed to authenticate with the MCP registry server.' }, { status: 502 });
-  }
+  const visitor = await visitorToken(req);
+  if (!visitor) return signInRequired();
 
   const upstream = await fetch(`${mcpUrl}/api/chat`, {
     method: 'POST',
     headers: {
-      ...authHeaders,
+      Authorization: `Bearer ${visitor.access}`,
       'Content-Type': 'application/json',
       Accept: req.headers.get('accept') ?? '*/*',
     },
@@ -206,9 +219,14 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
   }
 
+  // apps/mcp refuses someone taken off its list: the page then asks them to sign in again.
+  if (upstream.status === 401) return signInRequired();
+
+  const headers = new Headers(upstream.headers);
+  if (visitor.setCookie) headers.append('Set-Cookie', visitor.setCookie);
   return new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
-    headers: upstream.headers,
+    headers,
   });
 }
