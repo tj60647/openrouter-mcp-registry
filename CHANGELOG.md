@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-11-27 — People sign in; the chat is for them
+
+TJ: "The demo should require workos, correct? Perhaps the mcp as well? The demo
+should register like any other client", with a list of addresses he keeps, and
+any model for those signed in.
+
+No migration. New settings, without which production refuses every client
+(apps/mcp) or the chat stays closed (apps/web): `WORKOS_CLIENT_ID`,
+`WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` and `ALLOWED_EMAILS` on apps/mcp;
+`MCP_OAUTH_CLIENT_ID` and `CHAT_SESSION_SECRET` on apps/web.
+
+### Behaviour changes
+
+- **The authorization endpoint asks a person to sign in** with WorkOS AuthKit,
+  and issues a code only for a verified address on `ALLOWED_EMAILS`. The code
+  carries the person, sealed (encrypted) so the client cannot read it, so no
+  database column was needed. Their tokens carry `person`, and the MCP endpoint,
+  the chat and every refresh check it against the list again: taking an address
+  off ends that person's access at once.
+- **Every token says whom it speaks for.** `client_credentials` tokens carry
+  `grant: client_credentials`. In production a token, code or refresh token with
+  neither (issued before this change) is refused, so interactive clients sign in
+  once more; a service client's old access token lapses within the hour and the
+  next one it mints carries the claim.
+- **Registering a service client needs `OAUTH_REGISTRATION_ACCESS_TOKEN`**, and
+  is refused while it is unset: a service client never meets the sign-in.
+  Interactive clients may still register freely.
+- **The chat (`/api/chat`) is for people only**: a service client's token is
+  refused, and the chat calls the registry's tools with the person's own token.
+- **The web demo is an ordinary client**: it signs the visitor in through
+  apps/mcp (authorization code + PKCE, public client `MCP_OAUTH_CLIENT_ID`),
+  keeps their tokens in an encrypted HttpOnly cookie, refreshes them, and sends
+  each message with them. It no longer uses `MCP_CLIENT_ID` for the chat.
+
 ## 2026-07-30 — External review remediation
 
 Fixes the defects raised in an external comparative review, plus six regressions

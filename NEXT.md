@@ -1,23 +1,36 @@
 # Next
 
-Updated: 2026-11-22
+Updated: 2026-11-27
 
 ## Where it stands
 
-An MCP server that gives coding assistants one current list of OpenRouter models, with alias resolution and validation, plus a reference web app with a chat demo and an admin page. It answers at https://openrouter-registry.aroughidea.com/ and its `/api/health` returns 200; the last merged work (2026-07-30) brought the docs in line with the code, added a changelog and guarded `/mcp-info` against drifting from the real tool schemas.
+An MCP server that gives coding assistants one current list of OpenRouter models, with alias resolution and validation, plus a reference web app with a chat demo and an admin page. It answers at https://openrouter-registry.aroughidea.com/ (the docs and demo) and https://openrouter-registry-mcp.aroughidea.com/ (the MCP server).
+
+On 2026-11-27 TJ asked for sign-in: "The demo should require workos, correct? Perhaps the mcp as well? The demo should register like any other client", with a list of addresses he keeps, and any model for those signed in. Built on `claude/graphwise-pr2-review-publish-gbkfax`:
+- The MCP server's authorization endpoint sends a person to WorkOS AuthKit and issues a code only for a verified address on `ALLOWED_EMAILS`; every token carries the person and is checked against the list on each use.
+- The chat (`/api/chat` on the MCP server) is for signed-in people only, and calls the registry's tools with the person's own token.
+- Registering a service client needs `OAUTH_REGISTRATION_ACCESS_TOKEN`; interactive clients may still register, since they must sign in.
+- The web demo is an ordinary public client of the MCP server: the visitor signs in through it, and each message goes with the visitor's own token.
+The same day, sign-up was briefly closed (`OAUTH_DISABLE_REGISTRATION=true`) and reopened at TJ's word.
 
 ## Next step
 
-Finish pull request #36 (GitHub sign-in for `/admin`, and the demo renamed to Registry Chat): its checks pass and it can merge. Create the GitHub OAuth app with the callback URL its description gives, set its variables on the web app, then merge and try a sign-in.
+TJ sets the sign-in up, then merges the pull request:
+1. In WorkOS, add the redirect URI `https://openrouter-registry-mcp.aroughidea.com/api/oauth/workos/callback`.
+2. On the MCP site on Vercel (`openrouter-mcp-registry-mcp`): `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` (that address), `ALLOWED_EMAILS` (his address, and anyone else's).
+3. Claude registers the demo as a client and sets `MCP_OAUTH_CLIENT_ID` and `CHAT_SESSION_SECRET` on the web site (`openrouter-mcp-registry-web`).
+Then a real sign-in from Claude and from the demo.
 
 ## After that
 
-- Check the changelog and README still match the code after #36.
+- Pull request #36 (GitHub sign-in for `/admin`, and the demo renamed to Registry Chat) touches the demo page and needs rebasing onto this work.
+- Check the admin page's list of registered clients for service clients registered by others before 2026-11-27; they keep working until revoked.
+- Check the changelog and README still match the code.
 
 ## Blocked or waiting
 
-- Pull request #36 waits on TJ's review and the OAuth app's setup.
+- The sign-in settings above, from TJ. Until they are on the MCP site, production refuses every interactive client once this is merged, so merge only after setting them.
 
 ## Open questions
 
-- This plan was drafted by Claude on 2026-11-22 from the code and its history. Is the next step right?
+- Should Agent Design Studio's service client keep calling `semantic_search` (it spends a little, per search), or move to a person's sign-in?
