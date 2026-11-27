@@ -1,7 +1,7 @@
 /**
  * @file people.test.ts
  * A person must sign in with WorkOS, and be on ALLOWED_EMAILS, before an interactive client gets a
- * token; every token says whom it speaks for, and the chat is for people only (TJ, 2026-11-27).
+ * token; every token says whom it speaks for (TJ, 2026-11-27).
  * Weighted to refusals. The database and WorkOS are stubbed.
  */
 
@@ -32,33 +32,12 @@ vi.mock('../lib/oauthStore', async () => {
 });
 vi.mock('../lib/rateLimit', () => ({ checkRateLimit: vi.fn(async () => true) }));
 
-vi.mock('@ai-sdk/openai', () => ({ createOpenAI: vi.fn(() => ({ chat: vi.fn(() => 'mock-model') })) }));
-vi.mock('ai', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('ai')>();
-  return { ...mod, streamText: vi.fn(() => ({ toUIMessageStreamResponse: () => new Response('streamed') })) };
-});
-const mcpConnections = vi.hoisted(() => [] as Array<RequestInit | undefined>);
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
-  Client: vi.fn(() => ({
-    connect: vi.fn().mockResolvedValue(undefined),
-    close: vi.fn().mockResolvedValue(undefined),
-    listTools: vi.fn().mockResolvedValue({ tools: [] }),
-    callTool: vi.fn(),
-  })),
-}));
-vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: vi.fn((_url: URL, opts?: { requestInit?: RequestInit }) => {
-    mcpConnections.push(opts?.requestInit);
-  }),
-}));
-
 import * as people from '../lib/people';
 import { signAccessToken, signRefreshToken, computePkceChallenge, verifyAccessToken } from '../lib/oauth';
 import { callerFromToken } from '../lib/caller';
 import { GET as authorize } from '../app/api/oauth/authorize/route';
 import { GET as callback } from '../app/api/oauth/workos/callback/route';
 import { POST as token } from '../app/api/oauth/token/route';
-import { POST as chat } from '../app/api/chat/route';
 
 const ORIGIN = 'https://registry.example';
 const CLIENT = {
@@ -109,7 +88,6 @@ beforeEach(() => {
   store.clients.clear();
   store.codes.clear();
   store.clients.set(CLIENT.clientId, CLIENT);
-  mcpConnections.length = 0;
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -307,30 +285,5 @@ describe('who may call', () => {
     expect(await callerFromToken(await signAccessToken('c', 'mcp:read'))).toBeNull();
     expect(await callerFromToken(undefined)).toBeNull();
     expect(await callerFromToken('not-a-jwt')).toBeNull();
-  });
-});
-
-describe('the chat, which spends money', () => {
-  const chatPost = (bearer?: string) =>
-    new Request(`${ORIGIN}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
-      body: JSON.stringify({ messages: [], model: 'anthropic/claude-opus-5.5' }),
-    });
-
-  it('answers a person on the list, and reaches the registry with their own token', async () => {
-    setUp({ NODE_ENV: 'production', OPENROUTER_API_KEY: 'k' });
-    const personal = await signAccessToken('demo-client', 'mcp:read', { person: 'owner@example.com' });
-    const res = await chat(chatPost(personal));
-    expect(res.status).toBe(200);
-    expect(mcpConnections[0]?.headers).toEqual({ Authorization: `Bearer ${personal}` });
-  });
-
-  it('refuses a service client, someone off the list, and no token at all', async () => {
-    setUp({ NODE_ENV: 'production', OPENROUTER_API_KEY: 'k' });
-    expect((await chat(chatPost(await signAccessToken('svc', 'mcp:read', { grant: 'client_credentials' })))).status).toBe(403);
-    expect((await chat(chatPost(await signAccessToken('c', 'mcp:read', { person: 'stranger@example.com' })))).status).toBe(401);
-    expect((await chat(chatPost())).status).toBe(401);
-    expect(mcpConnections).toHaveLength(0);
   });
 });

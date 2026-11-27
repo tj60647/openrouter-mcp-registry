@@ -1,11 +1,61 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// The demo owns its model (OpenRouter, this site's key) and reaches the registry only through the
+// MCP endpoint, with the visitor's own token. The model and the MCP client are stubbed here.
+const calls = vi.hoisted(() => ({
+  openai: [] as Array<Record<string, unknown>>,
+  streamText: [] as Array<Record<string, unknown>>,
+  transports: [] as Array<{ url: string; init?: RequestInit }>,
+  callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'tool answer' }] })),
+  connect: vi.fn(async () => undefined),
+}));
+
+vi.mock('@ai-sdk/openai', () => ({
+  createOpenAI: vi.fn((opts: Record<string, unknown>) => {
+    calls.openai.push(opts);
+    return { chat: vi.fn((model: string) => `model:${model}`) };
+  }),
+}));
+vi.mock('ai', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('ai')>();
+  return {
+    ...mod,
+    convertToModelMessages: vi.fn(async () => []),
+    streamText: vi.fn((opts: Record<string, unknown>) => {
+      calls.streamText.push(opts);
+      return { toUIMessageStreamResponse: (init?: ResponseInit) => new Response('streamed', init) };
+    }),
+  };
+});
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
+  Client: vi.fn(() => ({
+    connect: calls.connect,
+    close: vi.fn(async () => undefined),
+    listTools: vi.fn(async () => ({ tools: [{ name: 'list_models', description: 'List models', inputSchema: { type: 'object', properties: {} } }] })),
+    callTool: calls.callTool,
+  })),
+}));
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: vi.fn((url: URL, opts?: { requestInit?: RequestInit }) => {
+    calls.transports.push({ url: url.toString(), init: opts?.requestInit });
+  }),
+}));
+
 function makePostRequest(body: unknown, contentType = 'application/json') {
   return new Request('http://localhost/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': contentType },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
+}
+
+function resetCalls() {
+  calls.openai.length = 0;
+  calls.streamText.length = 0;
+  calls.transports.length = 0;
+  calls.callTool.mockClear();
+  calls.connect.mockReset();
+  calls.connect.mockResolvedValue(undefined);
 }
 
 const SECRET = 'test-chat-session-secret-at-least-32-chars';
@@ -32,8 +82,9 @@ function withCookie(req: Request, cookie: string): Request {
 
 describe('GET /api/chat', () => {
   beforeEach(() => {
+    resetCalls();
     signInEnv();
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ model: 'x/y', systemPrompt: 'OpenRouter', parameters: {}, availableModels: ['x/y'], tools: [] })));
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ models: [{ id: 'x/y' }] })));
   });
 
   afterEach(() => {
@@ -41,29 +92,33 @@ describe('GET /api/chat', () => {
     vi.unstubAllGlobals();
   });
 
-  it('signed in, proxies the agent configuration from apps/mcp with the visitor’s own token', async () => {
+  it('signed in, lists the registry’s tools through its MCP endpoint, with the visitor’s own token', async () => {
     const { GET } = await import('../app/api/chat/route');
     const res = await GET(withCookie(new Request('http://localhost/api/chat'), await signedIn(fresh())));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body['model']).toBe('x/y');
-    expect(body['systemPrompt']).toContain('OpenRouter');
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith('http://localhost:3001/api/chat', { headers: { Authorization: 'Bearer visitor-jwt' } });
+    const body = (await res.json()) as { tools: Array<{ name: string }>; availableModels: string[]; systemPrompt: string };
+    expect(body.tools.map((t) => t.name)).toEqual(['list_models']);
+    expect(body.availableModels).toContain('x/y');
+    expect(body.systemPrompt).toContain('OpenRouter');
+    expect(calls.transports[0]).toEqual({ url: 'http://localhost:3001/api/mcp', init: { headers: { Authorization: 'Bearer visitor-jwt' } } });
   });
 
-  it('signed out, shows the agent’s defaults and asks apps/mcp nothing', async () => {
+  it('signed out, shows the agent’s defaults and asks the registry nothing', async () => {
     const { GET } = await import('../app/api/chat/route');
     const res = await GET(new Request('http://localhost/api/chat'));
     expect(res.status).toBe(200);
     expect(((await res.json()) as Record<string, unknown>)['model']).toBeTruthy();
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    expect(calls.transports).toHaveLength(0);
   });
 });
 
 describe('POST /api/chat', () => {
   beforeEach(() => {
+    resetCalls();
     signInEnv();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('streamed', { status: 200 })));
+    vi.stubEnv('OPENROUTER_API_KEY', 'demo-openrouter-key');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('unexpected', { status: 500 })));
   });
 
   afterEach(() => {
@@ -71,12 +126,13 @@ describe('POST /api/chat', () => {
     vi.unstubAllGlobals();
   });
 
-  it('asks a visitor who has not signed in to sign in, and sends nothing on', async () => {
+  it('asks a visitor who has not signed in to sign in, and runs no model', async () => {
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(makePostRequest({ messages: [] }));
     expect(res.status).toBe(401);
     expect(((await res.json()) as { code: string }).code).toBe('sign_in_required');
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    expect(calls.transports).toHaveLength(0);
+    expect(calls.streamText).toHaveLength(0);
   });
 
   it('does not take a tampered cookie', async () => {
@@ -84,53 +140,73 @@ describe('POST /api/chat', () => {
     const cookie = (await signedIn(fresh())).replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
     const res = await POST(withCookie(makePostRequest({ messages: [] }), cookie));
     expect(res.status).toBe(401);
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    expect(calls.streamText).toHaveLength(0);
   });
 
-  it('sends a signed-in visitor’s message with their own token, never a service credential', async () => {
-    vi.stubEnv('OPENROUTER_API_KEY', '');
+  it('runs its own model on its own key, with the registry’s tools reached as the visitor', async () => {
     vi.stubEnv('MCP_CLIENT_ID', 'web-client');
     vi.stubEnv('MCP_CLIENT_SECRET', 'web-secret');
     const { POST } = await import('../app/api/chat/route');
-    const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
+    const res = await POST(withCookie(makePostRequest({ messages: [], model: 'anthropic/claude-opus-5.5', temperature: 0.3, maxOutputTokens: 512 }), await signedIn(fresh())));
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('streamed');
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3001/api/chat',
-      expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer visitor-jwt' }) })
-    );
+    expect(calls.openai[0]).toEqual({ baseURL: 'https://openrouter.ai/api/v1', apiKey: 'demo-openrouter-key' });
+    expect(calls.transports[0]).toEqual({ url: 'http://localhost:3001/api/mcp', init: { headers: { Authorization: 'Bearer visitor-jwt' } } });
+    const run = calls.streamText[0]!;
+    expect(run['model']).toBe('model:anthropic/claude-opus-5.5');
+    expect(run['temperature']).toBe(0.3);
+    expect(run['maxOutputTokens']).toBe(512);
+    expect(Object.keys(run['tools'] as object)).toEqual(['list_models']);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('a tool the model calls goes to the MCP server', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
+    const tools = calls.streamText[0]!['tools'] as Record<string, { execute: (a: unknown) => Promise<string> }>;
+    expect(await tools['list_models']!.execute({ limit: 5 })).toBe('tool answer');
+    expect(calls.callTool).toHaveBeenCalledWith({ name: 'list_models', arguments: { limit: 5 } });
+  });
+
+  it('is closed, before reaching the registry, while this site has no OpenRouter key', async () => {
+    vi.stubEnv('OPENROUTER_API_KEY', '');
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
+    expect(res.status).toBe(503);
+    expect(calls.transports).toHaveLength(0);
   });
 
   it('refreshes a token about to expire, and keeps the new one', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(Response.json({ access_token: 'renewed-jwt', refresh_token: 'renewed-refresh', expires_in: 3600 }))
-        .mockResolvedValueOnce(new Response('streamed', { status: 200 }))
-    );
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ access_token: 'renewed-jwt', refresh_token: 'renewed-refresh', expires_in: 3600 })));
     const { POST } = await import('../app/api/chat/route');
     const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn({ ...fresh(), expiresAt: Date.now() + 10_000 })));
     expect(res.status).toBe(200);
-    const [first, second] = vi.mocked(fetch).mock.calls;
-    expect(first?.[0]).toBe('http://localhost:3001/api/oauth/token');
-    expect(String((first?.[1] as RequestInit).body)).toContain('grant_type=refresh_token');
-    expect(String((first?.[1] as RequestInit).body)).toContain('client_id=demo-public-client');
-    expect((second?.[1] as { headers: Record<string, string> }).headers['Authorization']).toBe('Bearer renewed-jwt');
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(url).toBe('http://localhost:3001/api/oauth/token');
+    expect(String((init as RequestInit).body)).toContain('grant_type=refresh_token');
+    expect(String((init as RequestInit).body)).toContain('client_id=demo-public-client');
+    expect(calls.transports[0]?.init).toEqual({ headers: { Authorization: 'Bearer renewed-jwt' } });
     expect(res.headers.get('set-cookie')).toMatch(/^registry_chat=/);
   });
 
-  it('asks the visitor to sign in again when the refresh is refused, or apps/mcp refuses them', async () => {
+  it('asks the visitor to sign in again when the refresh is refused, or the registry refuses them', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'invalid_grant' }, { status: 400 })));
     const { POST } = await import('../app/api/chat/route');
     const expired = await signedIn({ ...fresh(), expiresAt: Date.now() - 1 });
     expect((await POST(withCookie(makePostRequest({ messages: [] }), expired))).status).toBe(401);
 
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'Unauthorized' }, { status: 401 })));
+    calls.connect.mockRejectedValueOnce(new Error('Error POSTing to endpoint (HTTP 401): {"error":"invalid_token"}'));
     const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
     expect(res.status).toBe(401);
     expect(((await res.json()) as { code: string }).code).toBe('sign_in_required');
+    expect(calls.streamText).toHaveLength(0);
+  });
+
+  it('says so when the registry cannot be reached', async () => {
+    calls.connect.mockRejectedValueOnce(new Error('fetch failed'));
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
+    expect(res.status).toBe(502);
   });
 
   it('returns 503 when both MCP_URL and NEXT_PUBLIC_MCP_URL are missing', async () => {
@@ -149,23 +225,5 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('Invalid request body');
-  });
-
-  it('passes chat controls through to apps/mcp, any model', async () => {
-    const { POST } = await import('../app/api/chat/route');
-
-    await POST(withCookie(makePostRequest({ messages: [], model: 'anthropic/claude-sonnet-4-5', temperature: 0.3, maxOutputTokens: 512 }), await signedIn(fresh())));
-
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'http://localhost:3001/api/chat',
-      expect.objectContaining({
-        body: JSON.stringify({
-          messages: [],
-          model: 'anthropic/claude-sonnet-4-5',
-          temperature: 0.3,
-          maxOutputTokens: 512,
-        }),
-      })
-    );
   });
 });

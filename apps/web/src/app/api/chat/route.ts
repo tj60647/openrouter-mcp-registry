@@ -1,14 +1,29 @@
-import type { UIMessage } from 'ai';
+/**
+ * The chat demo, an ordinary client of the registry's MCP server.
+ *
+ * TJ, 2026-11-27: "the intention of the demo is to be a demo of the MCP, so it should be wired up
+ * as the client of the MCP", then "rework 38 so the demo owns its model". So, as Claude or Cursor
+ * do, the demo brings its own model (OpenRouter, on this site's own key, OPENROUTER_API_KEY) and
+ * reaches the registry only through the MCP endpoint (/api/mcp), listing and calling its tools
+ * with the signed-in visitor's own token (lib/chatSignIn.ts). The MCP server holds no chat and pays
+ * for no model; its key is for its own embeddings.
+ */
+
+import { createOpenAI } from '@ai-sdk/openai';
+import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai';
+import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkRateLimit } from '../../../lib/rateLimit';
 import { getMcpBaseUrl } from '../../../lib/mcpAuth';
 import { CHAT_COOKIE, chatSignInSettings, cookieFrom, currentAccessToken, isConfigured } from '../../../lib/chatSignIn';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 // ── Rate-limit config ─────────────────────────────────────────────────────────
-// 20 chat POST requests per minute per IP. apps/web only proxies the request;
-// apps/mcp owns the OpenRouter call and registry tool execution.
+// 20 chat POST requests per minute per address, in this running copy of the site (lib/rateLimit.ts).
 const CHAT_RATE_LIMIT = { limit: 20, windowMs: 60_000 };
 
 // ── Payload constraints ───────────────────────────────────────────────────────
@@ -61,8 +76,6 @@ const FALLBACK_MODELS = [
 ] as const;
 
 // ── The visitor's own token (lib/chatSignIn.ts) ──────────────────────────────
-// The chat is apps/mcp's, and apps/mcp lets only people who signed in use it. This app is one of
-// its clients: each message goes with the visitor's own token, never a service credential.
 
 async function visitorToken(req: Request): Promise<{ access: string; setCookie?: string } | null> {
   const settings = chatSignInSettings();
@@ -70,50 +83,100 @@ async function visitorToken(req: Request): Promise<{ access: string; setCookie?:
   return currentAccessToken(settings, cookieFrom(req.headers.get('cookie'), CHAT_COOKIE));
 }
 
-const signInRequired = () =>
+const signInRequired = (): Response =>
   Response.json({ error: 'Sign in to chat.', code: 'sign_in_required' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
 
-// ── MCP proxy helpers ─────────────────────────────────────────────────────────
+// ── The registry, through its MCP endpoint, as the visitor ────────────────────
 
-async function proxyMcpChatConfig(access: string): Promise<Response | null> {
-  const mcpUrl = getMcpBaseUrl();
-  if (!mcpUrl) return null;
+/** Raised when the MCP server refuses the visitor's token: they sign in again. */
+class RegistryRefused extends Error {}
 
+async function connectRegistry(mcpUrl: string, access: string): Promise<Client> {
+  const client = new Client({ name: 'registry-chat', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(`${mcpUrl}/api/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${access}` } },
+  });
   try {
-    const res = await fetch(`${mcpUrl}/api/chat`, { headers: { Authorization: `Bearer ${access}` } });
-    if (!res.ok) return null;
-    const data: unknown = await res.json();
-    return Response.json(data, { status: res.status });
+    await client.connect(transport);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/\b401\b|unauthorized|invalid_token/i.test(message)) throw new RegistryRefused(message);
+    throw err;
+  }
+  return client;
+}
+
+/** The registry's tools, as the model sees them; each call goes back to the MCP server. */
+function registryTools(client: Client, listed: Array<{ name: string; description?: string; inputSchema: unknown }>): ToolSet {
+  return Object.fromEntries(
+    listed.map((t) => [
+      t.name,
+      {
+        description: t.description ?? '',
+        inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
+        execute: async (args: unknown): Promise<string> => {
+          const result = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> });
+          const text = (result.content as Array<{ type: string; text?: string }>)
+            .filter((c) => c.type === 'text' && typeof c.text === 'string')
+            .map((c) => c.text as string)
+            .join('\n');
+          return text || JSON.stringify(result.content);
+        },
+      },
+    ]),
+  );
+}
+
+/** Models offered in the picker: the registry's newest tool-capable ones, read from its public list. */
+async function fetchAvailableModels(mcpUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(`${mcpUrl}/api/models?toolsOnly=true&availableOnly=true&sortBy=newest&sortDir=desc&limit=20`);
+    const data = (await res.json()) as { models?: Array<{ id: string }> };
+    const ids = (data.models ?? []).map((m) => m.id);
+    if (!ids.includes(CHAT_MODEL)) ids.unshift(CHAT_MODEL);
+    return ids;
   } catch {
-    return null;
+    const fallback = [...FALLBACK_MODELS] as string[];
+    if (!fallback.includes(CHAT_MODEL)) fallback.unshift(CHAT_MODEL);
+    return fallback;
   }
 }
 
 // ── GET – agent config ────────────────────────────────────────────────────────
 
 export async function GET(req: Request): Promise<Response> {
-  // Signed out, the page still shows the agent's defaults; signed in, apps/mcp's live list.
-  const visitor = await visitorToken(req);
-  const proxied = visitor ? await proxyMcpChatConfig(visitor.access) : null;
-  if (proxied) {
-    if (visitor?.setCookie) proxied.headers.append('Set-Cookie', visitor.setCookie);
-    return proxied;
-  }
-
-  return Response.json({
+  const defaults = {
     model: CHAT_MODEL,
     systemPrompt: SYSTEM_PROMPT,
     parameters: AGENT_PARAMETERS,
-    availableModels: [...FALLBACK_MODELS],
-    tools: [],
-  });
+    availableModels: [...FALLBACK_MODELS] as string[],
+    tools: [] as Array<{ name: string; description: string }>,
+  };
+  const mcpUrl = getMcpBaseUrl();
+  // Signed out, the page shows the agent's defaults; signed in, the registry's live tools and models.
+  const visitor = mcpUrl ? await visitorToken(req) : null;
+  if (!mcpUrl || !visitor) return Response.json(defaults);
+
+  const [availableModels, tools] = await Promise.all([
+    fetchAvailableModels(mcpUrl),
+    (async () => {
+      const client = await connectRegistry(mcpUrl, visitor.access).catch(() => null);
+      if (!client) return [];
+      const listed = await client.listTools().catch(() => ({ tools: [] }));
+      await client.close().catch(() => {});
+      return listed.tools.map((t: { name: string; description?: string }) => ({ name: t.name, description: t.description ?? '' }));
+    })(),
+  ]);
+  const res = Response.json({ ...defaults, availableModels, tools });
+  if (visitor.setCookie) res.headers.append('Set-Cookie', visitor.setCookie);
+  return res;
 }
 
-// ── POST – streaming chat proxy ──────────────────────────────────────────────
+// ── POST – the chat ───────────────────────────────────────────────────────────
 
 export async function POST(req: Request): Promise<Response> {
   // ── Rate limiting ───────────────────────────────────────────────────────────
-  const forwarded = (req as { headers: Headers }).headers.get('x-forwarded-for');
+  const forwarded = req.headers.get('x-forwarded-for');
   const ip = forwarded?.split(',')[0]?.trim() ?? 'unknown';
   if (!checkRateLimit(`chat:${ip}`, CHAT_RATE_LIMIT)) {
     return Response.json({ error: 'Too many requests. Please slow down.' }, { status: 429 });
@@ -125,7 +188,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ── Payload size guard ──────────────────────────────────────────────────────
-  const contentLength = Number((req as { headers: Headers }).headers.get('content-length') ?? 0);
+  const contentLength = Number(req.headers.get('content-length') ?? 0);
   if (contentLength > MAX_BODY_BYTES) {
     return Response.json({ error: 'Request body too large.' }, { status: 413 });
   }
@@ -140,19 +203,9 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'Request body too large.' }, { status: 413 });
   }
 
-  let parsedBody: {
-    messages: UIMessage[];
-    model?: string;
-    temperature?: number;
-    maxOutputTokens?: number;
-  };
+  let parsedBody: { messages: UIMessage[]; model?: string; temperature?: number; maxOutputTokens?: number };
   try {
-    parsedBody = JSON.parse(rawBody) as {
-      messages: UIMessage[];
-      model?: string;
-      temperature?: number;
-      maxOutputTokens?: number;
-    };
+    parsedBody = JSON.parse(rawBody) as typeof parsedBody;
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
@@ -199,34 +252,45 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // ── Who is asking, and the demo's own model ────────────────────────────────
   const visitor = await visitorToken(req);
   if (!visitor) return signInRequired();
 
-  const upstream = await fetch(`${mcpUrl}/api/chat`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${visitor.access}`,
-      'Content-Type': 'application/json',
-      Accept: req.headers.get('accept') ?? '*/*',
-    },
-    body: JSON.stringify({ messages, model: requestedModel, temperature, maxOutputTokens }),
-  }).catch((err: unknown) => {
-    console.error('[chat/route] MCP chat proxy failed:', err instanceof Error ? err.message : err);
-    return null;
-  });
+  const apiKey = process.env['OPENROUTER_API_KEY'];
+  if (!apiKey) {
+    console.error('[chat/route] OPENROUTER_API_KEY is not set on this site');
+    return Response.json({ error: 'The chat is not set up yet.' }, { status: 503 });
+  }
 
-  if (!upstream) {
+  let client: Client;
+  try {
+    client = await connectRegistry(mcpUrl, visitor.access);
+  } catch (err) {
+    if (err instanceof RegistryRefused) return signInRequired();
+    console.error('[chat/route] MCP connection failed:', err instanceof Error ? err.message : err);
     return Response.json({ error: 'Failed to connect to the MCP registry server.' }, { status: 502 });
   }
 
-  // apps/mcp refuses someone taken off its list: the page then asks them to sign in again.
-  if (upstream.status === 401) return signInRequired();
-
-  const headers = new Headers(upstream.headers);
-  if (visitor.setCookie) headers.append('Set-Cookie', visitor.setCookie);
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers,
-  });
+  try {
+    const { tools: listed } = await client.listTools();
+    const openrouter = createOpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey });
+    const result = streamText({
+      model: openrouter.chat(requestedModel ?? CHAT_MODEL),
+      system: SYSTEM_PROMPT,
+      messages: await convertToModelMessages(messages),
+      tools: registryTools(client, listed),
+      temperature,
+      maxOutputTokens,
+      stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
+      onFinish: async () => {
+        await client.close().catch(() => {});
+      },
+    });
+    const headers = new Headers();
+    if (visitor.setCookie) headers.append('Set-Cookie', visitor.setCookie);
+    return result.toUIMessageStreamResponse({ headers });
+  } catch (err) {
+    await client.close().catch(() => {});
+    throw err;
+  }
 }
