@@ -1,4 +1,4 @@
-import { verifyAccessToken } from '../../../lib/oauth';
+import { callerFromToken } from '../../../lib/caller';
 import { initMcpServer } from '../../../lib/mcp-server';
 import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
@@ -6,7 +6,8 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 /**
  * Verify an incoming ****** against our self-hosted OAuth AS.
  *
- * When OAUTH_JWT_SECRET is configured, tokens must be valid HS256 JWTs.
+ * When OAUTH_JWT_SECRET is configured, tokens must be valid HS256 JWTs, and must speak for a
+ * person still on ALLOWED_EMAILS or a service client (lib/caller.ts).
  * When it is not configured:
  *   - production: fail closed (return undefined → 401)
  *   - development/test: anonymous access allowed for convenience.
@@ -24,17 +25,14 @@ const verifyToken = async (
     // Dev/test convenience: anonymous open access.
     return { token: bearerToken ?? '', clientId: 'anonymous', scopes: ['mcp:read'] };
   }
-  if (!bearerToken) return undefined;
-  try {
-    const claims = await verifyAccessToken(bearerToken);
-    return {
-      token: bearerToken,
-      clientId: claims.sub ?? 'unknown',
-      scopes: (claims.scope ?? 'mcp:read').split(' ').filter(Boolean),
-    };
-  } catch {
-    return undefined;
-  }
+  const caller = await callerFromToken(bearerToken);
+  if (!caller) return undefined;
+  return {
+    token: bearerToken ?? '',
+    clientId: caller.clientId,
+    scopes: caller.scopes,
+    extra: { person: caller.person, service: caller.service },
+  };
 };
 
 const handler = createMcpHandler(

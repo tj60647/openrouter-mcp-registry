@@ -3,7 +3,7 @@ import { streamText, jsonSchema, convertToModelMessages, stepCountIs } from 'ai'
 import type { UIMessage, JSONSchema7, ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { verifyAccessToken } from '../../../lib/oauth';
+import { callerFromToken } from '../../../lib/caller';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,9 +16,6 @@ const MAX_OUTPUT_TOKENS = 16_384;
 const MAX_TEMPERATURE = 2.0;
 const MODEL_ID_RE = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/;
 
-/** Cached service token, reused across requests on a warm instance. */
-let cachedServiceToken: { value: string; expiresAt: number } | null = null;
-const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
 const SYSTEM_PROMPT =
   `You are a helpful assistant for the OpenRouter Registry MCP, specializing in helping AI agents and developers build new agents. ` +
@@ -56,68 +53,40 @@ function getMcpBaseUrl(): string {
   return 'http://localhost:3001';
 }
 
-async function requireRouteAuth(req: Request): Promise<Response | null> {
+/**
+ * The chat spends money (a model of the caller's choosing, through OPENROUTER_API_KEY), so it is
+ * for people only: a token from a person who signed in and is on ALLOWED_EMAILS (lib/caller.ts).
+ * A service client's token is refused. The registry's tools are then called with that same token,
+ * so the chat reaches the registry as the person, as any other client does (TJ, 2026-11-27: "The
+ * demo should register like any other client").
+ *
+ * Returns the person's bearer token (undefined in local development without OAUTH_JWT_SECRET),
+ * or the refusal.
+ */
+async function requirePerson(req: Request): Promise<{ token: string | undefined } | { refusal: Response }> {
   const jwtSecret = process.env['OAUTH_JWT_SECRET'];
   if (!jwtSecret) {
     if (process.env['NODE_ENV'] === 'production') {
-      return Response.json({ error: 'MCP auth is not configured' }, { status: 503 });
+      return { refusal: Response.json({ error: 'MCP auth is not configured' }, { status: 503 }) };
     }
-    return null;
+    return { token: undefined };
   }
 
   const auth = req.headers.get('authorization');
   const token = auth?.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
-  if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!token) return { refusal: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
 
-  try {
-    const claims = await verifyAccessToken(token);
-    const scopes = (claims.scope ?? '').split(' ').filter(Boolean);
-    if (!scopes.includes('mcp:read')) return Response.json({ error: 'Forbidden' }, { status: 403 });
-    return null;
-  } catch {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const caller = await callerFromToken(token);
+  if (!caller) return { refusal: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
+  if (!caller.scopes.includes('mcp:read')) return { refusal: Response.json({ error: 'Forbidden' }, { status: 403 }) };
+  if (caller.service) {
+    return { refusal: Response.json({ error: 'The chat is for people who have signed in, not service clients.' }, { status: 403 }) };
   }
+  return { token };
 }
 
-async function getMcpBearerToken(mcpUrl: string): Promise<string | null> {
-  const clientId = process.env['MCP_CLIENT_ID'];
-  const clientSecret = process.env['MCP_CLIENT_SECRET'];
-  if (!clientId && !clientSecret) {
-    if (process.env['NODE_ENV'] === 'production') {
-      throw new Error('MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured for production MCP access.');
-    }
-    return null;
-  }
-  if (!clientId || !clientSecret) {
-    throw new Error('Both MCP_CLIENT_ID and MCP_CLIENT_SECRET must be configured together.');
-  }
-
-  // Reuse the token until shortly before it expires. This route calls its own
-  // host's token endpoint, which is rate limited per source address, so minting
-  // one per chat message would spend that budget on itself. Mirrors the cache in
-  // apps/web/src/lib/mcpAuth.ts.
-  if (cachedServiceToken && Date.now() < cachedServiceToken.expiresAt) {
-    return cachedServiceToken.value;
-  }
-
-  const res = await fetch(`${mcpUrl}/api/oauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, scope: 'mcp:read' }),
-  });
-  if (!res.ok) throw new Error(`MCP OAuth token request failed with status ${res.status}.`);
-  const data = (await res.json()) as { access_token?: string; expires_in?: number };
-  const token = data.access_token ?? null;
-  if (token) {
-    const ttlMs = Math.min((data.expires_in ?? 3600) * 1000, 3600_000) - TOKEN_REFRESH_MARGIN_MS;
-    if (ttlMs > 0) cachedServiceToken = { value: token, expiresAt: Date.now() + ttlMs };
-  }
-  return token;
-}
-
-async function connectMcpClient(mcpUrl: string): Promise<Client> {
+async function connectMcpClient(mcpUrl: string, bearerToken: string | undefined): Promise<Client> {
   const normalizedMcpUrl = mcpUrl.replace(/\/+$/, '');
-  const bearerToken = await getMcpBearerToken(normalizedMcpUrl);
   const requestInit: RequestInit = bearerToken ? { headers: { Authorization: `Bearer ${bearerToken}` } } : {};
   const client = new Client({ name: 'mcp-chat', version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${normalizedMcpUrl}/api/mcp`), { requestInit });
@@ -140,13 +109,13 @@ async function fetchAvailableModels(): Promise<string[]> {
 }
 
 export async function GET(req: Request): Promise<Response> {
-  const authError = await requireRouteAuth(req);
-  if (authError) return authError;
+  const auth = await requirePerson(req);
+  if ('refusal' in auth) return auth.refusal;
 
   const [availableModels, mcpTools] = await Promise.all([
     fetchAvailableModels(),
     (async (): Promise<Array<{ name: string; description: string }>> => {
-      const client = await connectMcpClient(getMcpBaseUrl()).catch(() => null);
+      const client = await connectMcpClient(getMcpBaseUrl(), auth.token).catch(() => null);
       if (!client) return [];
       const listed = await client.listTools().catch(() => ({ tools: [] }));
       await client.close().catch(() => {});
@@ -158,8 +127,8 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const authError = await requireRouteAuth(req);
-  if (authError) return authError;
+  const auth = await requirePerson(req);
+  if ('refusal' in auth) return auth.refusal;
 
   const apiKey = process.env['OPENROUTER_API_KEY'];
   if (!apiKey) return Response.json({ error: 'OPENROUTER_API_KEY is not configured' }, { status: 503 });
@@ -198,7 +167,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: `maxOutputTokens must be between 1 and ${MAX_OUTPUT_TOKENS}.` }, { status: 400 });
   }
 
-  const mcpClient = await connectMcpClient(getMcpBaseUrl()).catch((err: unknown) => {
+  const mcpClient = await connectMcpClient(getMcpBaseUrl(), auth.token).catch((err: unknown) => {
     console.error('[mcp chat] MCP connection failed:', err instanceof Error ? err.message : err);
     return null;
   });

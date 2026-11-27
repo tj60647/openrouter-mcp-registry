@@ -13,6 +13,12 @@
  * Returns short-lived HS256 JWT access tokens (+ refresh tokens for the
  * authorization_code / refresh_token grants).
  *
+ * Every token says whom it speaks for (lib/people.ts): an authorization code carries the person
+ * who signed in, and their tokens carry `person`, checked against ALLOWED_EMAILS again at every
+ * refresh; client_credentials tokens carry `grant: client_credentials` instead. In production a
+ * code or refresh token with no person (from before sign-in was required) is refused, so the client
+ * signs in again.
+ *
  * Rate limited: 20 requests per minute per IP.
  */
 
@@ -26,7 +32,9 @@ import {
   filterScopes,
   SUPPORTED_GRANT_TYPES,
   TOKEN_TTL_SECONDS,
+  type TokenSubject,
 } from '../../../../lib/oauth';
+import { isAllowed, personFromAuthorizationCode } from '../../../../lib/people';
 import { findClient, consumeAuthorizationCode } from '../../../../lib/oauthStore';
 import { checkRateLimit } from '../../../../lib/rateLimit';
 
@@ -156,7 +164,10 @@ async function handleAuthorizationCode(
     return tokenError('invalid_grant', 400, 'PKCE verification failed');
   }
 
-  return issueTokens(clientId, record.scope, withRefresh);
+  const person = await personFromAuthorizationCode(code);
+  const refusal = personRefusal(person);
+  if (refusal) return refusal;
+  return issueTokens(clientId, record.scope, withRefresh, person ? { person } : {});
 }
 
 async function handleRefreshToken(
@@ -173,6 +184,9 @@ async function handleRefreshToken(
     return tokenError('invalid_grant', 400, 'invalid or expired refresh token');
   }
   if (claims.sub !== clientId) return tokenError('invalid_grant', 400, 'client mismatch');
+  const person = typeof claims.person === 'string' ? claims.person : null;
+  const refusal = personRefusal(person);
+  if (refusal) return refusal;
 
   // Honour a narrowing scope request; otherwise keep the token's scope.
   const requested = params['scope'];
@@ -185,7 +199,21 @@ async function handleRefreshToken(
       )
     : filterScopes(claims.scope);
 
-  return issueTokens(clientId, scope, true);
+  return issueTokens(clientId, scope, true, person ? { person } : {});
+}
+
+/**
+ * A grant on a person's behalf needs a person still on the list. Production refuses one without a
+ * person (a code or refresh token from before sign-in was required), so the client signs in again;
+ * local development without sign-in set up issues codes without one.
+ */
+function personRefusal(person: string | null): NextResponse | null {
+  if (person) {
+    return isAllowed(person) ? null : tokenError('invalid_grant', 400, 'this person is no longer allowed; sign in again');
+  }
+  return process.env['NODE_ENV'] === 'production'
+    ? tokenError('invalid_grant', 400, 'sign-in is required; connect again')
+    : null;
 }
 
 async function handleClientCredentials(
@@ -197,16 +225,17 @@ async function handleClientCredentials(
   const allowed = new Set(clientScope.split(' '));
   const requested = requestedScope ? requestedScope.split(' ').filter((s) => allowed.has(s)) : [];
   const scope = requested.length > 0 ? requested.join(' ') : clientScope;
-  return issueTokens(clientId, scope, false);
+  return issueTokens(clientId, scope, false, { grant: 'client_credentials' });
 }
 
 async function issueTokens(
   clientId: string,
   scope: string,
   withRefresh: boolean,
+  subject: TokenSubject,
 ): Promise<NextResponse> {
   try {
-    const accessToken = await signAccessToken(clientId, scope);
+    const accessToken = await signAccessToken(clientId, scope, subject);
     const body: Record<string, unknown> = {
       access_token: accessToken,
       token_type: 'Bearer',
@@ -214,7 +243,7 @@ async function issueTokens(
       scope,
     };
     if (withRefresh) {
-      body['refresh_token'] = await signRefreshToken(clientId, scope);
+      body['refresh_token'] = await signRefreshToken(clientId, scope, subject);
     }
     return NextResponse.json(body);
   } catch (err) {

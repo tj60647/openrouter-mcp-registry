@@ -55,9 +55,18 @@ export function getIssuerUrl(): string {
   return 'http://localhost:3001';
 }
 
+/**
+ * Who a token speaks for, beyond its client: `person`, the signed-in email behind an interactive
+ * client (lib/people.ts), or `grant: 'client_credentials'` for a service client, which is a machine.
+ */
+export interface TokenSubject {
+  person?: string;
+  grant?: 'client_credentials';
+}
+
 /** Sign a short-lived access token for the given client ID and scope. */
-export async function signAccessToken(clientId: string, scope: string): Promise<string> {
-  return new SignJWT({ scope, token_use: 'access' })
+export async function signAccessToken(clientId: string, scope: string, subject: TokenSubject = {}): Promise<string> {
+  return new SignJWT({ scope, token_use: 'access', ...subject })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(clientId)
     .setIssuer(getIssuerUrl())
@@ -68,8 +77,8 @@ export async function signAccessToken(clientId: string, scope: string): Promise<
 }
 
 /** Sign a long-lived refresh token. Distinguished from access tokens by token_use. */
-export async function signRefreshToken(clientId: string, scope: string): Promise<string> {
-  return new SignJWT({ scope, token_use: 'refresh' })
+export async function signRefreshToken(clientId: string, scope: string, subject: TokenSubject = {}): Promise<string> {
+  return new SignJWT({ scope, token_use: 'refresh', ...subject })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(clientId)
     .setIssuer(getIssuerUrl())
@@ -82,6 +91,10 @@ export async function signRefreshToken(clientId: string, scope: string): Promise
 export interface AccessTokenClaims extends JWTPayload {
   scope?: string;
   token_use?: string;
+  /** The signed-in person's email, for tokens from the authorization-code grant. */
+  person?: string;
+  /** 'client_credentials' for a service client's token. */
+  grant?: string;
 }
 
 /**
