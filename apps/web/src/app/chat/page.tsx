@@ -880,7 +880,7 @@ export default function DemoPage() {
         }}
       >
         <div>
-          <h1>Live Demo</h1>
+          <h1>Registry Chat</h1>
           <p style={{ color: 'var(--text-muted)' }}>
             Imagine you are an AI agent whose job is to build another agent — this assistant knows
             the live model registry and can help you pick the right model, write a system prompt,
