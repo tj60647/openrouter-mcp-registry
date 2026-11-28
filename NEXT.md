@@ -1,6 +1,6 @@
 # Next
 
-Updated: 2026-11-27
+Updated: 2026-11-28
 
 ## Where it stands
 
@@ -13,23 +13,23 @@ On 2026-11-27 TJ asked for sign-in: "The demo should require workos, correct? Pe
 - The web demo is an ordinary public client of the MCP server: the visitor signs in through it, and each message goes with the visitor's own token.
 The same day, sign-up was briefly closed (`OAUTH_DISABLE_REGISTRATION=true`) and reopened at TJ's word.
 
+On 2026-11-28 the sign-in went live (pull request #38 merged): WorkOS (A Rough Idea's Project, Production, the projectregister.thomasjmcleish.com app) with the registry's return address added, the MCP site's `WORKOS_*` and `ALLOWED_EMAILS` set, the demo registered as a public client (`MCP_OAUTH_CLIENT_ID`), and `CHAT_SESSION_SECRET` set. TJ signed in on the demo and it answered with a list of models. The Vercel sites were renamed the same day to `openrouter-registry-mcp` and `openrouter-registry-demo` (their addresses unchanged), and the shared OpenRouter key to `aroughidea-openrouter-registry-prod`.
+
 ## Next step
 
-TJ sets the sign-in up, then merges the pull request:
-1. In WorkOS, add the redirect URI `https://openrouter-registry-mcp.aroughidea.com/api/oauth/workos/callback`.
-2. On the MCP site on Vercel (`openrouter-mcp-registry-mcp`): `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` (that address), `ALLOWED_EMAILS` (his address, and anyone else's).
-3. Claude registers the demo as a client and sets `MCP_OAUTH_CLIENT_ID` and `CHAT_SESSION_SECRET` on the web site (`openrouter-mcp-registry-web`). The two sites get a key each: the current shared key becomes the MCP server's (`aroughidea-openrouter-mcp-registry-mcp-prod`), and the web site gets a new one (`aroughidea-openrouter-mcp-registry-web-prod`) for the chat.
-Then a real sign-in from Claude and from the demo.
+The demo fitted to a phone (TJ, 2026-11-28: "The demo needs reworked for mobile"), on `claude/graphwise-pr2-review-publish-gbkfax`: TJ looks at it on his phone, then it is merged.
 
 ## After that
 
+- Split the shared OpenRouter key: `aroughidea-openrouter-registry-mcp-prod` for the MCP server, `aroughidea-openrouter-registry-demo-prod` for the demo's chat.
+- Give the registry its own WorkOS app rather than sharing the register's.
 - Pull request #36 (GitHub sign-in for `/admin`, and the demo renamed to Registry Chat) touches the demo page and needs rebasing onto this work.
 - Check the admin page's list of registered clients for service clients registered by others before 2026-11-27; they keep working until revoked.
 - Check the changelog and README still match the code.
 
 ## Blocked or waiting
 
-- The sign-in settings above, from TJ. Until they are on the MCP site, production refuses every interactive client once this is merged, so merge only after setting them.
+- Nothing.
 
 ## Open questions
 

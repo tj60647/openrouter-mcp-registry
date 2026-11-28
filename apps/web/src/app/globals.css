@@ -523,5 +523,59 @@ p { margin-bottom: 1rem; }
     gap: 0.5rem;
     padding: 0.5rem 1rem;
   }
-  nav .links { gap: 0.3rem; }
+  /* One row that scrolls sideways, not two rows that take a fifth of a phone's screen. */
+  nav .links {
+    gap: 0.3rem;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    width: 100%;
+    scrollbar-width: none;
+  }
+  nav .links::-webkit-scrollbar { display: none; }
+}
+
+/* ── Demo (app/demo/page.tsx) ────────────────────────────────────────────── */
+/* On a desktop the demo fills one screen: 6.75rem is the 44px sticky nav plus main's 2rem top
+   and bottom padding. On a phone the nav and header are taller than that allows, which crushed the
+   chat window to a sliver, so there the page flows and the chat window takes most of the screen. */
+
+.demo-page { height: calc(100vh - 6.75rem); max-height: 900px; }
+.demo-signin { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; border: 1px solid var(--border); padding: 0.5rem 0.75rem; font-size: 0.85rem; }
+.demo-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.demo-header-tools { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; padding-top: 0.35rem; }
+.demo-body { display: flex; gap: 1rem; flex: 1; min-height: 0; }
+.demo-window { position: relative; flex: 1; min-height: 0; }
+.demo-form { display: flex; gap: 0.75rem; align-items: flex-end; }
+.demo-toolbar { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.demo-chat-title { font-size: 0.7rem; color: var(--text-muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.demo-keyhint { font-size: 0.75rem; color: var(--text-muted); margin-top: -0.25rem; }
+.demo-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.demo-panel { width: 280px; flex-shrink: 0; }
+
+@media (max-width: 768px) {
+  main:has(.demo-page) { padding: 1rem 0; }
+  .demo-page { height: auto; max-height: none; }
+  .demo-signin { font-size: 0.8rem; padding: 0.4rem 0.6rem; }
+  .demo-signin > :is(button, a) { padding: 0.35rem 0.6rem; }
+  .demo-header { flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .demo-header h1 { font-size: 1.1rem; }
+  /* The empty chat window says the same thing, so the phone skips it and the message box sits higher. */
+  .demo-header p { display: none; }
+  .demo-toolbar { flex-wrap: nowrap; }
+  .demo-chat-title { max-width: none; min-width: 0; flex: 0 1 auto; }
+  .demo-header-tools { padding-top: 0; flex-wrap: wrap; max-width: 100%; }
+  .demo-header-tools .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .demo-body { flex-direction: column; }
+  /* dvh follows the phone's address bar; vh is the fallback. */
+  /* What is left of the screen after the nav, the sign-in bar, the title, the chat controls and
+     the message box (about 22rem), so the message box is on screen without scrolling; never less
+     than 14rem. */
+  .demo-window { flex: none; height: max(14rem, calc(100vh - 22rem)); height: max(14rem, calc(100dvh - 22rem)); }
+  /* 16px stops iOS zooming the page when the box is tapped. */
+  .demo-form textarea { font-size: 16px; }
+  /* A phone has no Shift+Enter. */
+  .demo-keyhint { display: none; }
+  /* The example prompts sit in one row that scrolls sideways. */
+  .demo-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.25rem; }
+  .demo-panel { width: 100%; }
 }
