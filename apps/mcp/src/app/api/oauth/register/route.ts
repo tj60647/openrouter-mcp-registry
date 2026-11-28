@@ -31,7 +31,15 @@
  * redirect_uris are public (PKCE, no secret) and may not use client_credentials.
  *
  * Set OAUTH_REGISTRATION_ACCESS_TOKEN to require an initial access token
- * (`Authorization: Bearer <token>`) on this endpoint. Unset, registration is open.
+ * (`Authorization: Bearer <token>`) on this endpoint. Unset, registration is open
+ * to interactive (public) clients only.
+ *
+ * Since 2026-11-27 a person must sign in before an interactive client gets a
+ * token (authorize/route.ts, lib/people.ts), so an open registration grants
+ * nothing by itself. A service client (client_credentials) never meets that
+ * sign-in, so registering one always needs the initial access token: with
+ * OAUTH_REGISTRATION_ACCESS_TOKEN unset, service clients are refused and are
+ * provisioned by the operator (MCP_CLIENT_ID / MCP_CLIENT_SECRET).
  *
  * The response carries an RFC 7592 `registration_access_token` and
  * `registration_client_uri` so a client can read or delete its own registration.
@@ -44,6 +52,7 @@ import {
   getIssuerUrl,
   constantTimeEquals,
   InvalidClientMetadataError,
+  resolveGrantTypes,
 } from '../../../../lib/oauth';
 import { createDynamicClient, type DynamicClientRegistration } from '../../../../lib/oauthStore';
 import { checkRateLimit } from '../../../../lib/rateLimit';
@@ -154,6 +163,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return invalidMetadata('grant_types must be an array of strings');
     }
     requestedGrantTypes = body.grant_types as string[];
+  }
+
+  // A service client never meets the person's sign-in, so it needs the operator's token.
+  try {
+    const { isPublic } = resolveGrantTypes(requestedGrantTypes, redirectUris);
+    if (!isPublic) {
+      if (!process.env['OAUTH_REGISTRATION_ACCESS_TOKEN']) {
+        return invalidMetadata(
+          'service clients (client_credentials) are provisioned by the operator; register with redirect_uris to sign in as a person',
+        );
+      }
+      // With the token set, checkInitialAccessToken above has already checked it.
+    }
+  } catch (err) {
+    if (err instanceof InvalidClientMetadataError) return invalidMetadata(err.message);
+    throw err;
   }
 
   let reg: DynamicClientRegistration;

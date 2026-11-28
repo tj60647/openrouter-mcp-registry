@@ -9,11 +9,14 @@
  * apps/web keeps the in-memory version deliberately: it has no runtime database
  * access by design (see "MCP-owned backend env boundary" in the README, and the
  * test asserting apps/web does not require POSTGRES_URL), so it cannot share a
- * Postgres counter the way apps/mcp does. Both surfaces limited here proxy to
- * apps/mcp, and that is where the durable, cross-instance limit is enforced:
+ * Postgres counter the way apps/mcp does.
  *
- * - /api/admin/login  -> apps/mcp /api/admin/verify-login, limited per username
- * - /api/chat         -> apps/mcp /api/chat
+ * - /api/admin/login  -> apps/mcp /api/admin/verify-login, where the durable,
+ *                        cross-instance limit is enforced per username
+ * - /api/chat         -> the chat demo's own model (since 2026-11-27). Only
+ *                        signed-in people on apps/mcp's list can use it; this
+ *                        per-instance limit is the only rate limit on it, so a
+ *                        durable per-person limit is still to come.
  *
  * Old entries are pruned lazily whenever the map grows beyond PRUNE_THRESHOLD
  * to avoid unbounded memory growth.

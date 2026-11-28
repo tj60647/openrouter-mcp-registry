@@ -1,10 +1,16 @@
 /**
  * OAuth 2.1 Authorization Endpoint (RFC 6749 §3.1, RFC 7636 PKCE).
  *
- * This registry exposes public model-catalog data and has no end-user accounts,
- * so authorization is auto-approved: the endpoint validates the client, the
- * exact redirect URI, and the PKCE challenge, then immediately issues a
- * single-use authorization code and redirects back. No consent screen.
+ * A person must sign in (TJ, 2026-11-27: "The demo should require workos … Perhaps the mcp as
+ * well"). The endpoint validates the client, the exact redirect URI and the PKCE challenge; then,
+ * unless a valid sign-in cookie names someone on ALLOWED_EMAILS, it sends the browser to WorkOS
+ * AuthKit, whose callback (../workos/callback) returns here with the same query. Then it issues a
+ * single-use authorization code that carries the person (lib/people.ts) and redirects back. No
+ * consent screen: being on the list is the consent.
+ *
+ * Sign-in not set up (lib/people.ts, signInMissing): production refuses every client (503); local
+ * development keeps the old auto-approval, and its tokens carry no person, which only a
+ * non-production server accepts.
  *
  * Security:
  *   - redirect_uri must EXACTLY match one registered for the client (no open
@@ -15,6 +21,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { filterScopes } from '../../../../lib/oauth';
 import { findClient, createAuthorizationCode } from '../../../../lib/oauthStore';
+import {
+  PERSON_COOKIE,
+  SIGNIN_STATE_COOKIE,
+  SIGNIN_STATE_SECONDS,
+  authorizeUrl,
+  cookieFrom,
+  newSignInState,
+  readPersonSession,
+  safeReturnTo,
+  sealAuthorizationCode,
+  setCookie,
+  signInMissing,
+  workosSettings,
+} from '../../../../lib/people';
 import { checkRateLimit } from '../../../../lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -83,12 +103,35 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const grantedScope = filterScopes(scope);
 
+  // ── The person ──
+  const missing = signInMissing();
+  let sealed: string | undefined;
+  if (missing.length > 0) {
+    if (process.env['NODE_ENV'] === 'production') {
+      console.error('[oauth/authorize] sign-in is not set up; missing:', missing.join(', '));
+      return errorPage('Sign-in is not set up on this server yet, so no client can connect.', 503);
+    }
+  } else {
+    const person = await readPersonSession(cookieFrom(req.headers.get('cookie'), PERSON_COOKIE));
+    if (!person) {
+      const returnTo = safeReturnTo(`${req.nextUrl.pathname}${req.nextUrl.search}`);
+      const settings = workosSettings();
+      if (!returnTo || !settings) return errorPage('This sign-in request is too long or malformed.', 400);
+      const { nonce, cookie } = await newSignInState(returnTo);
+      const res = NextResponse.redirect(authorizeUrl(settings, nonce), 302);
+      res.headers.append('Set-Cookie', setCookie(SIGNIN_STATE_COOKIE, cookie, SIGNIN_STATE_SECONDS));
+      return res;
+    }
+    sealed = await sealAuthorizationCode(person);
+  }
+
   const code = await createAuthorizationCode({
     clientId,
     redirectUri,
     codeChallenge,
     codeChallengeMethod,
     scope: grantedScope,
+    code: sealed,
   });
 
   const url = new URL(redirectUri);

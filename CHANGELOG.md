@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-11-27 — People sign in; the chat is for them
+
+TJ: "The demo should require workos, correct? Perhaps the mcp as well? The demo
+should register like any other client", with a list of addresses he keeps, and
+any model for those signed in.
+
+No migration. New settings, without which production refuses every client
+(apps/mcp) or the chat stays closed (apps/web): `WORKOS_CLIENT_ID`,
+`WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` and `ALLOWED_EMAILS` on apps/mcp;
+`MCP_OAUTH_CLIENT_ID`, `CHAT_SESSION_SECRET` and the chat's own
+`OPENROUTER_API_KEY` on apps/web.
+
+### Behaviour changes
+
+- **The authorization endpoint asks a person to sign in** with WorkOS AuthKit,
+  and issues a code only for a verified address on `ALLOWED_EMAILS`. The code
+  carries the person, sealed (encrypted) so the client cannot read it, so no
+  database column was needed. Their tokens carry `person`, and the MCP endpoint,
+  the chat and every refresh check it against the list again: taking an address
+  off ends that person's access at once.
+- **Every token says whom it speaks for.** `client_credentials` tokens carry
+  `grant: client_credentials`. In production a token, code or refresh token with
+  neither (issued before this change) is refused, so interactive clients sign in
+  once more; a service client's old access token lapses within the hour and the
+  next one it mints carries the claim.
+- **Registering a service client needs `OAUTH_REGISTRATION_ACCESS_TOKEN`**, and
+  is refused while it is unset: a service client never meets the sign-in.
+  Interactive clients may still register freely.
+- **The chat moved into the demo, which owns its model** (TJ: "the intention
+  of the demo is to be a demo of the MCP … rework 38 so the demo owns its
+  model"). apps/mcp's `/api/chat` is removed; the MCP server now pays only for
+  its own sync and embeddings. The demo runs its model on its own
+  `OPENROUTER_API_KEY` and calls the registry's tools through `/api/mcp` with
+  the visitor's token, as Claude or Cursor would. Removes: apps/mcp
+  `GET`/`POST /api/chat`, and apps/mcp's `ai` and `@ai-sdk/openai` dependencies.
+- **The web demo is an ordinary client**: it signs the visitor in through
+  apps/mcp (authorization code + PKCE, public client `MCP_OAUTH_CLIENT_ID`),
+  keeps their tokens in an encrypted HttpOnly cookie, refreshes them, and uses
+  them for every call to the registry. It no longer uses `MCP_CLIENT_ID` for
+  the chat.
+
 ## 2026-07-30 — External review remediation
 
 Fixes the defects raised in an external comparative review, plus six regressions

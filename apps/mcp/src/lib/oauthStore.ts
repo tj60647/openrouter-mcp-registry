@@ -266,8 +266,10 @@ export async function createAuthorizationCode(params: {
   codeChallenge: string;
   codeChallengeMethod: string;
   scope: string;
+  /** A code made by the caller (lib/people.ts seals the person into it); a random one otherwise. */
+  code?: string;
 }): Promise<string> {
-  const code = generateAuthorizationCode();
+  const code = params.code ?? generateAuthorizationCode();
   const codeHash = hashAuthorizationCode(code);
   const expiresAt = new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString();
 

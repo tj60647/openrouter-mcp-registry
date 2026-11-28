@@ -202,8 +202,9 @@ ${baseUrl}/.well-known/oauth-protected-resource     ← PR metadata (RFC 9728)`}
           need to create or paste a token. On first use the server replies with a <code>401</code>{' '}
           that points to its OAuth metadata; the client registers itself via dynamic client
           registration, opens a browser to authorize (authorization code + PKCE), and stores the
-          resulting token. Because this registry serves public model data, the authorization step is
-          auto-approved, so the browser tab simply flashes and returns.
+          resulting token. At the authorization step the browser asks you to sign in (WorkOS); only
+          the addresses its operator has listed are let in, and taking an address off the list ends
+          that person&apos;s access at once.
         </p>
 
         <h3 style={{ ...SUBHEAD, marginTop: '1.25rem' }}>Server-to-server (client credentials)</h3>
@@ -315,10 +316,12 @@ ${baseUrl}/.well-known/oauth-protected-resource     ← PR metadata (RFC 9728)`}
           </li>
         </ul>
         <p style={SMALL_MUTED}>
-          Registration is rate-limited to 5 per 15 minutes per IP. Operators can require an initial
-          access token by setting <code>OAUTH_REGISTRATION_ACCESS_TOKEN</code> (registration then
-          needs <code>Authorization: Bearer &lt;that value&gt;</code> and returns{' '}
-          <code>401 invalid_token</code> without it), or refuse registration entirely with{' '}
+          Registration is rate-limited to 5 per 15 minutes per IP. A server-to-server client never
+          meets the sign-in, so registering one needs the operator&apos;s initial access token,{' '}
+          <code>OAUTH_REGISTRATION_ACCESS_TOKEN</code> (sent as{' '}
+          <code>Authorization: Bearer &lt;that value&gt;</code>; without it,{' '}
+          <code>401 invalid_token</code>, or <code>400 invalid_client_metadata</code> while the
+          operator has set none). Operators can refuse registration entirely with{' '}
           <code>OAUTH_DISABLE_REGISTRATION=true</code>, which returns{' '}
           <code>400 registration_not_supported</code>.
         </p>

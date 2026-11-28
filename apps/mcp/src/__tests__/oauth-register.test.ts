@@ -279,8 +279,13 @@ describe('POST /api/oauth/register', () => {
   });
 
   it('issues a secret with client_secret_expires_at: 0 for a client_credentials client', async () => {
+    // A service client never meets the person's sign-in, so it needs the operator's token.
+    vi.stubEnv('OAUTH_REGISTRATION_ACCESS_TOKEN', 'operator-initial-token');
     const res = await registerPost(
-      registerRequest({ client_name: 'Service client', grant_types: ['client_credentials'] }),
+      registerRequest(
+        { client_name: 'Service client', grant_types: ['client_credentials'] },
+        { authorization: 'Bearer operator-initial-token' },
+      ),
     );
     const body = (await res.json()) as Record<string, unknown>;
 
@@ -335,9 +340,22 @@ describe('POST /api/oauth/register initial access token', () => {
     mockSql.mockResolvedValue({ rows: [{ created_at: '2026-01-01T00:00:00.000Z' }] });
   });
 
-  it('allows registration when OAUTH_REGISTRATION_ACCESS_TOKEN is unset', async () => {
-    const res = await registerPost(registerRequest({ client_name: 'Open client' }));
+  it('allows an interactive client to register when OAUTH_REGISTRATION_ACCESS_TOKEN is unset', async () => {
+    const res = await registerPost(
+      registerRequest({ client_name: 'Open client', redirect_uris: ['http://127.0.0.1:33418/callback'] }),
+    );
     expect(res.status).toBe(201);
+  });
+
+  it('refuses a service client when OAUTH_REGISTRATION_ACCESS_TOKEN is unset, before anything is stored', async () => {
+    for (const body of [{ client_name: 'Service' }, { client_name: 'Service', grant_types: ['client_credentials'] }]) {
+      const res = await registerPost(registerRequest(body));
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(res.status).toBe(400);
+      expect(json['error']).toBe('invalid_client_metadata');
+      expect(json['error_description']).toMatch(/provisioned by the operator/);
+    }
+    expect(mockSql).not.toHaveBeenCalled();
   });
 
   it('rejects registration without the token when it is configured', async () => {
