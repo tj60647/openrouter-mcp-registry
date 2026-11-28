@@ -239,8 +239,11 @@ export async function POST(req: Request): Promise<Response> {
     if (Array.isArray(parts) && parts.some(isOversizedTextPart)) {
       return Response.json({ error: 'Message content too long.' }, { status: 400 });
     }
+    // Only what the visitor writes: the demo's own earlier answers come back as history, and an
+    // answer the visitor asked to be long must not get their next message refused.
     const uiParts: unknown = (msg as { parts?: unknown }).parts;
-    if (Array.isArray(uiParts) && partsTextLength(uiParts) > MAX_MESSAGE_CHARS) {
+    const fromVisitor = (msg as { role?: unknown }).role === 'user';
+    if (fromVisitor && Array.isArray(uiParts) && partsTextLength(uiParts) > MAX_MESSAGE_CHARS) {
       return Response.json({ error: 'Message content too long.' }, { status: 400 });
     }
   }

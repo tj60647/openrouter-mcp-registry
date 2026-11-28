@@ -271,4 +271,22 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
     expect(calls.streamText).toHaveLength(1);
   });
+
+  it('takes a long earlier answer in the history, but not a long message from the visitor', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const cookie = await signedIn(fresh());
+    // Its own address, so this file's requests stay under the 20-a-minute limit for one address.
+    const fromOwnAddress = (req: Request) => {
+      req.headers.set('x-forwarded-for', '203.0.113.10');
+      return req;
+    };
+    const longAnswer = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'x'.repeat(40_000) }] };
+    const ok = await POST(fromOwnAddress(withCookie(makePostRequest({ messages: [said('hi'), longAnswer, said('and then?')] }), cookie)));
+    expect(ok.status).toBe(200);
+    expect(calls.streamText).toHaveLength(1);
+
+    const refused = await POST(fromOwnAddress(withCookie(makePostRequest({ messages: [said('hi'), longAnswer, said('y'.repeat(40_000))] }), cookie)));
+    expect(refused.status).toBe(400);
+    expect(calls.streamText).toHaveLength(1);
+  });
 });
