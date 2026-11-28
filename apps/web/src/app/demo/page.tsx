@@ -344,7 +344,7 @@ function AgentPanel({
           min={1}
           max={MAX_TOKEN_LIMIT}
           step={256}
-          placeholder="Model default"
+          placeholder="4096 (default)"
           value={maxOutputTokens ?? ''}
           onChange={(e) => onMaxOutputTokensChange(parseMaxTokens(e.target.value))}
           style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem' }}

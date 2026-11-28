@@ -29,7 +29,7 @@ The demo fitted to a phone (TJ, 2026-11-28: "The demo needs reworked for mobile"
 
 ## Blocked or waiting
 
-- Nothing.
+- The demo's answers get a default length of 4,096 tokens, and its per-message size check now works (`claude/demo-answer-length`): waiting on TJ's merge.
 
 ## Open questions
 

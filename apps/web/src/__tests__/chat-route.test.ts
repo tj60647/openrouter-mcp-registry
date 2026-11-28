@@ -226,4 +226,67 @@ describe('POST /api/chat', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('Invalid request body');
   });
+
+  // An answer has a length limit even when the visitor sets none (plan step 10).
+  it('gives an answer 4,096 tokens when the visitor asks for no length', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [] }), await signedIn(fresh())));
+    expect(res.status).toBe(200);
+    expect(calls.streamText[0]!['maxOutputTokens']).toBe(4096);
+  });
+
+  it('keeps the visitor’s own length up to 16,384 tokens, and refuses more', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const cookie = await signedIn(fresh());
+    expect((await POST(withCookie(makePostRequest({ messages: [], maxOutputTokens: 16_384 }), cookie))).status).toBe(200);
+    expect(calls.streamText[0]!['maxOutputTokens']).toBe(16_384);
+
+    const res = await POST(withCookie(makePostRequest({ messages: [], maxOutputTokens: 16_385 }), cookie));
+    expect(res.status).toBe(400);
+    expect(calls.streamText).toHaveLength(1);
+  });
+
+  // The demo sends messages as the AI SDK does, with their text in `parts` (no `content`).
+  const said = (...texts: string[]) => ({ id: 'm1', role: 'user', parts: texts.map((text) => ({ type: 'text', text })) });
+
+  it('refuses a message whose text is longer than 32,768 characters, and runs no model', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [said('x'.repeat(32_769))] }), await signedIn(fresh())));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('Message content too long.');
+    expect(calls.transports).toHaveLength(0);
+    expect(calls.streamText).toHaveLength(0);
+  });
+
+  it('counts all the text in a message, across its parts', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [said('x'.repeat(20_000), 'y'.repeat(20_000))] }), await signedIn(fresh())));
+    expect(res.status).toBe(400);
+    expect(calls.streamText).toHaveLength(0);
+  });
+
+  it('takes a message of exactly 32,768 characters', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const res = await POST(withCookie(makePostRequest({ messages: [said('x'.repeat(32_768))] }), await signedIn(fresh())));
+    expect(res.status).toBe(200);
+    expect(calls.streamText).toHaveLength(1);
+  });
+
+  it('takes a long earlier answer in the history, but not a long message from the visitor', async () => {
+    const { POST } = await import('../app/api/chat/route');
+    const cookie = await signedIn(fresh());
+    // Its own address, so this file's requests stay under the 20-a-minute limit for one address.
+    const fromOwnAddress = (req: Request) => {
+      req.headers.set('x-forwarded-for', '203.0.113.10');
+      return req;
+    };
+    const longAnswer = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'x'.repeat(40_000) }] };
+    const ok = await POST(fromOwnAddress(withCookie(makePostRequest({ messages: [said('hi'), longAnswer, said('and then?')] }), cookie)));
+    expect(ok.status).toBe(200);
+    expect(calls.streamText).toHaveLength(1);
+
+    const refused = await POST(fromOwnAddress(withCookie(makePostRequest({ messages: [said('hi'), longAnswer, said('y'.repeat(40_000))] }), cookie)));
+    expect(refused.status).toBe(400);
+    expect(calls.streamText).toHaveLength(1);
+  });
 });

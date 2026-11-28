@@ -31,6 +31,8 @@ const MAX_BODY_BYTES = 100 * 1024; // 100 KB
 const MAX_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 32_768; // 32 KB per individual message content string
 const MAX_OUTPUT_TOKENS = 16_384;
+// An answer's length when the caller asks for none, so no answer runs to the model's own limit.
+const DEFAULT_OUTPUT_TOKENS = 4_096;
 const MAX_TEMPERATURE = 2.0;
 // Model IDs must follow the "<provider>/<model>" format with safe characters only.
 const MODEL_ID_RE = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/;
@@ -42,6 +44,17 @@ function isOversizedTextPart(part: unknown): boolean {
   return (
     p['type'] === 'text' && typeof p['text'] === 'string' && p['text'].length > MAX_MESSAGE_CHARS
   );
+}
+
+/** The length of all the text in a message's `parts`, which is where the AI SDK's client sends it. */
+function partsTextLength(parts: unknown[]): number {
+  let total = 0;
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) continue;
+    const p = part as Record<string, unknown>;
+    if (p['type'] === 'text' && typeof p['text'] === 'string') total += p['text'].length;
+  }
+  return total;
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -226,6 +239,13 @@ export async function POST(req: Request): Promise<Response> {
     if (Array.isArray(parts) && parts.some(isOversizedTextPart)) {
       return Response.json({ error: 'Message content too long.' }, { status: 400 });
     }
+    // Only what the visitor writes: the demo's own earlier answers come back as history, and an
+    // answer the visitor asked to be long must not get their next message refused.
+    const uiParts: unknown = (msg as { parts?: unknown }).parts;
+    const fromVisitor = (msg as { role?: unknown }).role === 'user';
+    if (fromVisitor && Array.isArray(uiParts) && partsTextLength(uiParts) > MAX_MESSAGE_CHARS) {
+      return Response.json({ error: 'Message content too long.' }, { status: 400 });
+    }
   }
 
   if (requestedModel !== undefined && !MODEL_ID_RE.test(requestedModel)) {
@@ -280,7 +300,7 @@ export async function POST(req: Request): Promise<Response> {
       messages: await convertToModelMessages(messages),
       tools: registryTools(client, listed),
       temperature,
-      maxOutputTokens,
+      maxOutputTokens: maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
       stopWhen: stepCountIs(AGENT_PARAMETERS.max_steps),
       onFinish: async () => {
         await client.close().catch(() => {});
