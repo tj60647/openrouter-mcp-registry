@@ -732,22 +732,12 @@ const SIGN_IN_PROBLEMS: Record<string, string> = {
 
 function SignInBar({ signIn, problem, onSignOut }: { signIn: SignInState | null; problem: string | null; onSignOut: () => void }) {
   if (!signIn) return null;
-  const box: React.CSSProperties = {
-    display: 'flex',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '0.5rem 1rem',
-    border: '1px solid var(--border)',
-    padding: '0.5rem 0.75rem',
-    fontSize: '0.85rem',
-  };
   if (!signIn.configured) {
-    return <div style={box}>Sign-in for the chat is not set up yet, so the chat is closed.</div>;
+    return <div className="demo-signin">Sign-in for the chat is not set up yet, so the chat is closed.</div>;
   }
   if (signIn.signedIn) {
     return (
-      <div style={box}>
+      <div className="demo-signin">
         <span style={{ color: 'var(--text-muted)' }}>Signed in{signIn.person ? ` as ${signIn.person}` : ''}.</span>
         <button type="button" onClick={onSignOut} title="Forget your sign-in on this browser. You can sign in again at any time.">
           Sign Out
@@ -756,7 +746,7 @@ function SignInBar({ signIn, problem, onSignOut }: { signIn: SignInState | null;
     );
   }
   return (
-    <div style={box}>
+    <div className="demo-signin">
       <span>
         {problem ? `${problem} ` : ''}
         The chat runs on the registry’s own account, so it is open to the people its owner has listed. Sign in to chat.
@@ -820,7 +810,6 @@ export default function DemoPage() {
 
   const [input, setInput] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const loading = status === 'submitted' || status === 'streaming';
@@ -922,9 +911,16 @@ export default function DemoPage() {
     setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 50);
   }, []);
 
+  // Scroll the chat window itself. scrollIntoView also scrolled the page, which on a phone
+  // pushed the sign-in bar up under the sticky nav as soon as the page loaded.
+  const scrollChatToBottom = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+
   useEffect(() => {
-    if (isAtBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, status, isAtBottom]);
+    if (isAtBottom) scrollChatToBottom();
+  }, [messages, status, isAtBottom, scrollChatToBottom]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -952,20 +948,14 @@ export default function DemoPage() {
     cursor: disabled ? 'not-allowed' : 'pointer',
   });
 
-  // 6.75rem === 44px sticky nav + 2rem top/bottom main padding.
+  // The page fills one desktop screen (globals.css, .demo-page: 44px sticky nav + 2rem top and
+  // bottom main padding); on a phone it flows instead and the chat window takes most of the screen.
   return (
-    <div className="stack" style={{ height: 'calc(100vh - 6.75rem)', maxHeight: 900 }}>
+    <div className="stack demo-page">
       <SignInBar signIn={signIn} problem={signInProblem} onSignOut={signOut} />
 
       {/* Page header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: '1rem',
-        }}
-      >
+      <div className="demo-header">
         <div>
           <h1>Live Demo</h1>
           <p style={{ color: 'var(--text-muted)' }}>
@@ -974,15 +964,7 @@ export default function DemoPage() {
             and configure parameters for any agent you want to create.
           </p>
         </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.6rem',
-            flexShrink: 0,
-            paddingTop: '0.35rem',
-          }}
-        >
+        <div className="demo-header-tools">
           {activeModel ? (
             <span
               className="badge badge-info"
@@ -1016,7 +998,7 @@ export default function DemoPage() {
       </div>
 
       {/* Two-column layout: chat | agent panel */}
-      <div style={{ display: 'flex', gap: '1rem', flex: 1, minHeight: 0 }}>
+      <div className="demo-body">
         {/* Chat column */}
         <div
           style={{
@@ -1028,7 +1010,7 @@ export default function DemoPage() {
           }}
         >
           {/* Chat history toolbar */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <div className="demo-toolbar">
             <button
               type="button"
               onClick={newChat}
@@ -1051,17 +1033,7 @@ export default function DemoPage() {
             >
               ‹
             </button>
-            <span
-              title={chatTitle}
-              style={{
-                fontSize: '0.7rem',
-                color: 'var(--text-muted)',
-                maxWidth: 240,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
+            <span title={chatTitle} className="demo-chat-title">
               Chat {sessions.length > 0 ? currentIndex + 1 : 0} / {sessions.length}
               {chatTitle !== 'New chat' ? ` · ${chatTitle}` : ''}
             </span>
@@ -1088,7 +1060,7 @@ export default function DemoPage() {
           </div>
 
           {/* Chat window */}
-          <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+          <div className="demo-window">
             <div
               ref={scrollContainerRef}
               onScroll={handleScroll}
@@ -1272,7 +1244,6 @@ export default function DemoPage() {
                 </div>
               )}
 
-              <div ref={bottomRef} />
             </div>
 
             {/* Scroll-to-bottom button */}
@@ -1280,7 +1251,7 @@ export default function DemoPage() {
               <button
                 type="button"
                 onClick={() => {
-                  bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+                  scrollChatToBottom();
                   setIsAtBottom(true);
                 }}
                 aria-label="Scroll to bottom"
@@ -1313,7 +1284,7 @@ export default function DemoPage() {
           {/* Input form */}
           <form
             onSubmit={handleSubmit}
-            style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}
+            className="demo-form"
           >
             <textarea
               value={input}
@@ -1339,23 +1310,17 @@ export default function DemoPage() {
               </button>
             )}
           </form>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '-0.25rem' }}>
+          <p className="demo-keyhint">
             Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for a new line
           </p>
 
           {/* Persistent example prompt chips */}
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.4rem',
-              flexWrap: 'wrap',
-            }}
-          >
+          <div className="demo-chips">
             {EXAMPLE_PROMPTS.map((p) => (
               <button
                 key={p.label}
                 type="button"
-                disabled={loading}
+                disabled={loading || !canChat}
                 onClick={() => {
                   void sendMessage({ text: p.text }, { body: chatBody });
                 }}
@@ -1363,15 +1328,15 @@ export default function DemoPage() {
                 // square, disabled expressed as colour rather than opacity.
                 style={{
                   flexShrink: 0,
-                  background: loading ? 'var(--disabled-bg)' : 'var(--bg-hover)',
+                  background: loading || !canChat ? 'var(--disabled-bg)' : 'var(--bg-hover)',
                   border: '1px solid var(--border)',
-                  color: loading ? 'var(--disabled-text)' : 'var(--text)',
+                  color: loading || !canChat ? 'var(--disabled-text)' : 'var(--text)',
                   borderRadius: 0,
                   padding: '0.35rem 0.75rem',
                   fontSize: '0.625rem',
                   fontWeight: 700,
                   letterSpacing: '0.08em',
-                  cursor: loading ? 'not-allowed' : 'pointer',
+                  cursor: loading || !canChat ? 'not-allowed' : 'pointer',
                   whiteSpace: 'nowrap',
                 }}
               >
@@ -1383,7 +1348,7 @@ export default function DemoPage() {
 
         {/* Agent panel (sidebar) */}
         {showPanel && (
-          <div style={{ width: 280, flexShrink: 0 }}>
+          <div className="demo-panel">
             <AgentPanel
               config={agentConfig}
               selectedModel={selectedModel}
